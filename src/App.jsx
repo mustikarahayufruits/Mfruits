@@ -27,7 +27,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const APP_ID = 'buahsegar-mobile-v1';
+const APP_ID = 'Mfruits-mobile-v1';
 
 // ============================================================================
 // 2. DATA DEFAULT & HELPER
@@ -141,8 +141,8 @@ const DEFAULT_DATA = {
     }
   ],
   bankAccounts: [
-    { id: 'b1', bank: 'BCA', number: '8820192837', holder: 'BuahSegar Store' },
-    { id: 'b2', bank: 'SeaBank / GoPay', number: '081234567890', holder: 'BuahSegar Store' }
+    { id: 'b1', bank: 'BCA', number: '8820192837', holder: 'Mfruits Store' },
+    { id: 'b2', bank: 'SeaBank / GoPay', number: '081234567890', holder: 'Mfruits Store' }
   ],
   transactions: [
     { id: 't1', type: 'capital', date: getTodayDateStr(), desc: 'Modal Awal Usaha & Persediaan Rumah', amount: 750000 }
@@ -200,7 +200,7 @@ export default function App() {
   // Mode Terang / Gelap (tersimpan otomatis di localStorage)
   const [colorMode, setColorMode] = useState(() => {
     try {
-      return localStorage.getItem('buahsegar_fresh_mode') || 'light';
+      return localStorage.getItem('Mfruits_fresh_mode') || 'light';
     } catch {
       return 'light';
     }
@@ -209,7 +209,7 @@ export default function App() {
   const toggleColorMode = (mode) => {
     setColorMode(mode);
     try {
-      localStorage.setItem('buahsegar_fresh_mode', mode);
+      localStorage.setItem('Mfruits_fresh_mode', mode);
     } catch {}
   };
 
@@ -868,7 +868,7 @@ export default function App() {
                 BS
               </div>
               <div>
-                <h1 className="font-extrabold text-base leading-tight">BuahSegar Mobile</h1>
+                <h1 className="font-extrabold text-base leading-tight">Mfruits Mobile</h1>
                 <p className="text-[11px] text-white/80 font-medium">
                   {dbError ? 'Error Firebase' : user ? 'Cloud Firestore Aktif' : 'Menghubungkan...'}
                 </p>
