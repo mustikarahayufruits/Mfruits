@@ -149,8 +149,11 @@ const DEFAULT_DATA = {
   ]
 };
 
-const THEME_STYLES = {
-  fresh: {
+// ============================================================================
+// TEMA FRESH: MODE TERANG & MODE GELAP
+// ============================================================================
+const FRESH_MODES = {
+  light: {
     '--bg-outer': '#e2e8f0',
     '--bg-app': '#f8fafc',
     '--bg-card': '#ffffff',
@@ -164,33 +167,19 @@ const THEME_STYLES = {
     '--header-grad': 'linear-gradient(135deg, #059669 0%, #0d9488 100%)',
     '--nav-bg': 'rgba(255, 255, 255, 0.96)'
   },
-  bento: {
-    '--bg-outer': '#090d16',
-    '--bg-app': '#0f172a',
-    '--bg-card': '#1e293b',
-    '--bg-card-sub': '#334155',
-    '--text-main': '#f8fafc',
+  dark: {
+    '--bg-outer': '#060a10',
+    '--bg-app': '#0b111a',
+    '--bg-card': '#131c2a',
+    '--bg-card-sub': '#1d293b',
+    '--text-main': '#f1f5f9',
     '--text-muted': '#94a3b8',
-    '--border-color': '#334155',
-    '--accent': '#84cc16',
-    '--accent-soft': 'rgba(132, 204, 22, 0.15)',
-    '--accent-text': '#a3e635',
-    '--header-grad': 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
-    '--nav-bg': 'rgba(30, 41, 59, 0.96)'
-  },
-  pastel: {
-    '--bg-outer': '#f5ebe0',
-    '--bg-app': '#fffbf7',
-    '--bg-card': '#ffffff',
-    '--bg-card-sub': '#fef3c7',
-    '--text-main': '#431407',
-    '--text-muted': '#9a3412',
-    '--border-color': '#fed7aa',
-    '--accent': '#ea580c',
-    '--accent-soft': '#ffedd5',
-    '--accent-text': '#c2410c',
-    '--header-grad': 'linear-gradient(135deg, #f97316 0%, #fb7185 100%)',
-    '--nav-bg': 'rgba(255, 251, 247, 0.96)'
+    '--border-color': '#233146',
+    '--accent': '#10b981',
+    '--accent-soft': 'rgba(16, 185, 129, 0.16)',
+    '--accent-text': '#34d399',
+    '--header-grad': 'linear-gradient(135deg, #064e3b 0%, #115e59 100%)',
+    '--nav-bg': 'rgba(19, 28, 42, 0.96)'
   }
 };
 
@@ -208,8 +197,23 @@ export default function App() {
   const [bankAccounts, setBankAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
 
+  // Mode Terang / Gelap (tersimpan otomatis di localStorage)
+  const [colorMode, setColorMode] = useState(() => {
+    try {
+      return localStorage.getItem('buahsegar_fresh_mode') || 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
+  const toggleColorMode = (mode) => {
+    setColorMode(mode);
+    try {
+      localStorage.setItem('buahsegar_fresh_mode', mode);
+    } catch {}
+  };
+
   // UI states
-  const [theme, setTheme] = useState('fresh');
   const [currentView, setCurrentView] = useState('home');
   const [stockFilter, setStockFilter] = useState('all');
   const [financeSubTab, setFinanceSubTab] = useState('sales');
@@ -313,10 +317,8 @@ export default function App() {
     };
   }, [user]);
 
-  const userCol = (colName) => collection(db, `artifacts/${APP_ID}/users/${user.uid}/${colName}`);
   const userDoc = (colName, id) => doc(db, `artifacts/${APP_ID}/users/${user.uid}/${colName}`, id);
 
-  // Seed / Reset Data Demo ke Firestore
   const seedDemoToFirestore = async () => {
     if (!user) return;
     const batch = writeBatch(db);
@@ -477,7 +479,6 @@ export default function App() {
     showToast('Item buah dihapus.');
   };
 
-  // Belanja Multi-Item & Auto-Create Buah Baru
   const openBulkRestockModal = () => {
     const first = fruits[0];
     setBulkRows([
@@ -838,17 +839,17 @@ export default function App() {
     return { cfIn, cfOut, items };
   }, [transactions, financePeriods.cashflow]);
 
-  const activeThemeVars = THEME_STYLES[theme] || THEME_STYLES.fresh;
+  const activeThemeVars = FRESH_MODES[colorMode] || FRESH_MODES.light;
 
   return (
-    <div style={{ backgroundColor: activeThemeVars['--bg-outer'], minHeight: '100vh' }} className="flex justify-center font-sans">
+    <div style={{ backgroundColor: activeThemeVars['--bg-outer'], minHeight: '100vh' }} className="flex justify-center font-sans transition-colors duration-200">
       <div
         style={{
           ...activeThemeVars,
           backgroundColor: 'var(--bg-app)',
           color: 'var(--text-main)'
         }}
-        className="w-full max-w-[440px] min-h-screen relative flex flex-col shadow-2xl overflow-x-hidden"
+        className="w-full max-w-[440px] min-h-screen relative flex flex-col shadow-2xl overflow-x-hidden transition-colors duration-200"
       >
         {/* TOAST */}
         {toastMsg && (
@@ -859,7 +860,7 @@ export default function App() {
           </div>
         )}
 
-        {/* HEADER & THEME SWITCHER */}
+        {/* HEADER FRESH + SWITCHER MODE TERANG / GELAP */}
         <header style={{ background: 'var(--header-grad)' }} className="px-4 pt-4 pb-5 text-white rounded-b-[1.75rem] shadow-md sticky top-0 z-30">
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="flex items-center gap-2.5">
@@ -881,22 +882,24 @@ export default function App() {
             </button>
           </div>
 
+          {/* Switcher Mode Terang & Gelap */}
           <div className="bg-black/20 p-1 rounded-xl flex items-center justify-between gap-1 text-[11px] font-semibold">
-            {[
-              { id: 'fresh', label: '1. Fresh' },
-              { id: 'bento', label: '2. Bento POS' },
-              { id: 'pastel', label: '3. Pastel' }
-            ].map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTheme(t.id)}
-                className={`flex-1 py-1.5 rounded-lg transition-all ${
-                  theme === t.id ? 'bg-white text-slate-900 font-extrabold shadow' : 'text-white/80'
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
+            <button
+              onClick={() => toggleColorMode('light')}
+              className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                colorMode === 'light' ? 'bg-white text-emerald-800 font-extrabold shadow' : 'text-white/80 hover:text-white'
+              }`}
+            >
+              <span>☀️ Mode Terang</span>
+            </button>
+            <button
+              onClick={() => toggleColorMode('dark')}
+              className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                colorMode === 'dark' ? 'bg-slate-900 text-emerald-400 font-extrabold shadow' : 'text-white/80 hover:text-white'
+              }`}
+            >
+              <span>🌙 Mode Gelap</span>
+            </button>
           </div>
         </header>
 
@@ -990,7 +993,7 @@ export default function App() {
                         <div>
                           <strong className="text-xs font-extrabold block">{item.fruitName}</strong>
                           <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">
-                            Kurang: <b className="text-amber-600">{item.deficit} {item.unit}</b> • Est. {formatRp(item.estCost)}
+                            Kurang: <b className="text-amber-500">{item.deficit} {item.unit}</b> • Est. {formatRp(item.estCost)}
                           </span>
                         </div>
                         <button
@@ -1017,7 +1020,7 @@ export default function App() {
               <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-4 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-extrabold">Reminder Stok Habis & Menipis</h2>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-600">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-500">
                     {metrics.lowStockItems.length} Alert
                   </span>
                 </div>
@@ -1130,14 +1133,14 @@ export default function App() {
                               ) : null}
                             </div>
                             <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">
-                              Modal: <b>{formatRp(f.buyPrice)}</b>/{f.unit} • Jual: <b className="text-emerald-600">{formatRp(f.sellPrice)}</b>
+                              Modal: <b>{formatRp(f.buyPrice)}</b>/{f.unit} • Jual: <b className="text-emerald-500">{formatRp(f.sellPrice)}</b>
                             </span>
                           </div>
                           <div className="flex items-center gap-1">
                             <button onClick={() => openFruitModal(f)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-2 py-1 rounded-lg text-[11px] font-bold">
                               Edit
                             </button>
-                            <button onClick={() => deleteFruit(f.id)} className="px-2 py-1 rounded-lg bg-rose-500/10 text-rose-600 text-[11px] font-bold">
+                            <button onClick={() => deleteFruit(f.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
                               Hapus
                             </button>
                           </div>
@@ -1197,10 +1200,10 @@ export default function App() {
                             <span
                               className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
                                 isDone
-                                  ? 'bg-slate-500/15 text-slate-600'
+                                  ? 'bg-slate-500/15 text-slate-400'
                                   : isReq
-                                  ? 'bg-amber-500/15 text-amber-600'
-                                  : 'bg-emerald-500/15 text-emerald-600'
+                                  ? 'bg-amber-500/15 text-amber-500'
+                                  : 'bg-emerald-500/15 text-emerald-500'
                               }`}
                             >
                               {isDone ? 'Selesai' : isReq ? 'Request Paket' : 'Pesanan Pasti'}
@@ -1214,7 +1217,7 @@ export default function App() {
                           <h3 className="text-sm font-extrabold mt-1">{o.customer}</h3>
                           <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">{o.notes}</p>
                         </div>
-                        <button onClick={() => deleteOrder(o.id)} className="px-2 py-1 rounded-lg bg-rose-500/10 text-rose-600 text-[11px] font-bold">
+                        <button onClick={() => deleteOrder(o.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
                           Hapus
                         </button>
                       </div>
@@ -1231,11 +1234,11 @@ export default function App() {
                       <div className="flex items-center justify-between text-xs pt-1">
                         <div>
                           <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block">Modal / Jual</span>
-                          <strong>{formatRp(o.totalCost)} / <span className="text-emerald-600">{formatRp(o.totalSell)}</span></strong>
+                          <strong>{formatRp(o.totalCost)} / <span className="text-emerald-500">{formatRp(o.totalSell)}</span></strong>
                         </div>
                         <div className="text-right">
                           <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block">Est. Laba</span>
-                          <strong className="text-teal-600">+{formatRp(profit)}</strong>
+                          <strong className="text-teal-500">+{formatRp(profit)}</strong>
                         </div>
                       </div>
 
@@ -1314,7 +1317,7 @@ export default function App() {
                         >
                           Salin
                         </button>
-                        <button onClick={() => deleteDoc(userDoc('bankAccounts', b.id))} className="px-2 py-1.5 rounded-lg bg-rose-500/10 text-rose-600 text-[11px] font-bold">
+                        <button onClick={() => deleteDoc(userDoc('bankAccounts', b.id))} className="px-2 py-1.5 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
                           x
                         </button>
                       </div>
@@ -1328,10 +1331,10 @@ export default function App() {
                 const totalAr = unpaidList.reduce((s, o) => s + Number(o.totalSell || 0), 0);
                 return (
                   <>
-                    <div className="rounded-2xl p-3.5 flex items-center justify-between bg-amber-500/10 border border-amber-500/30">
+                    <div className="rounded-2xl p-3.5 flex items-center justify-between bg-amber-500/15 border border-amber-500/30">
                       <div>
-                        <span className="text-[10px] font-bold uppercase text-amber-600 block">Total Piutang Belum Lunas</span>
-                        <strong className="text-base font-extrabold text-amber-600">{formatRp(totalAr)}</strong>
+                        <span className="text-[10px] font-bold uppercase text-amber-500 block">Total Piutang Belum Lunas</span>
+                        <strong className="text-base font-extrabold text-amber-500">{formatRp(totalAr)}</strong>
                       </div>
                       <span className="px-2.5 py-1 rounded-xl bg-amber-500 text-white text-xs font-bold">{unpaidList.length} Tagihan</span>
                     </div>
@@ -1349,7 +1352,7 @@ export default function App() {
                                 <strong className="text-sm font-extrabold block">{o.customer}</strong>
                                 <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">Tgl Order: {o.completedDate || '-'} • {o.notes}</span>
                               </div>
-                              <strong className="text-sm font-extrabold text-amber-600">{formatRp(o.totalSell)}</strong>
+                              <strong className="text-sm font-extrabold text-amber-500">{formatRp(o.totalSell)}</strong>
                             </div>
                             <div className="flex items-center gap-2">
                               <button
@@ -1419,7 +1422,7 @@ export default function App() {
                 ))}
               </div>
 
-              {/* Filter Periode untuk Sub-Tab Aktif */}
+              {/* Filter Periode */}
               <div className="flex items-center gap-1.5 text-[11px] font-bold">
                 {[
                   { id: 'today', label: 'Hari Ini' },
@@ -1487,7 +1490,7 @@ export default function App() {
                             <div key={idx} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl space-y-1.5 text-xs">
                               <div className="flex items-center justify-between gap-2">
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold shrink-0 ${idx === 0 ? 'bg-amber-500 text-white' : 'bg-slate-400 text-white'}`}>
+                                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold shrink-0 ${idx === 0 ? 'bg-amber-500 text-white' : 'bg-slate-500 text-white'}`}>
                                     #{idx + 1}
                                   </span>
                                   <div className="truncate">
@@ -1497,11 +1500,11 @@ export default function App() {
                                     </span>
                                   </div>
                                 </div>
-                                <strong className="text-xs font-extrabold text-emerald-600 shrink-0">
+                                <strong className="text-xs font-extrabold text-emerald-500 shrink-0">
                                   {tf.totalQty} {tf.unit}
                                 </strong>
                               </div>
-                              <div className="w-full h-1.5 rounded-full bg-black/10 overflow-hidden">
+                              <div className="w-full h-1.5 rounded-full bg-black/15 overflow-hidden">
                                 <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
                               </div>
                             </div>
@@ -1523,14 +1526,14 @@ export default function App() {
                             <div>
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <strong className="text-sm font-extrabold">{t.customer || t.desc}</strong>
-                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold ${t.paymentStatus === 'paid' ? 'bg-emerald-500/15 text-emerald-600' : 'bg-amber-500/15 text-amber-600'}`}>
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold ${t.paymentStatus === 'paid' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>
                                   {t.paymentStatus === 'paid' ? 'LUNAS' : 'PIUTANG'}
                                 </span>
                               </div>
                               <span style={{ color: 'var(--text-muted)' }} className="text-[11px] block mt-0.5">Tgl: {t.date}</span>
                             </div>
                             <div className="text-right shrink-0">
-                              <strong className="text-sm font-extrabold text-emerald-600 block">{formatRp(t.amount)}</strong>
+                              <strong className="text-sm font-extrabold text-emerald-500 block">{formatRp(t.amount)}</strong>
                               <button onClick={() => deleteDoc(userDoc('transactions', t.id))} className="text-[10px] text-rose-500 font-bold">
                                 Hapus
                               </button>
@@ -1540,7 +1543,7 @@ export default function App() {
                           <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl space-y-1">
                             {itemList.map((it, i) => (
                               <div key={i} className="flex items-center justify-between text-[11px]">
-                                <span className="font-semibold">• {it.fruitName} <b className="text-emerald-600">({it.qty} {it.unit})</b></span>
+                                <span className="font-semibold">• {it.fruitName} <b className="text-emerald-500">({it.qty} {it.unit})</b></span>
                                 <span style={{ color: 'var(--text-muted)' }}>Modal {formatRp(Number(it.qty) * Number(it.buyPrice || 0))}</span>
                               </div>
                             ))}
@@ -1548,7 +1551,7 @@ export default function App() {
 
                           <div style={{ borderColor: 'var(--border-color)' }} className="flex items-center justify-between text-[11px] pt-1 border-t">
                             <span style={{ color: 'var(--text-muted)' }}>Total HPP: <b>{formatRp(t.costAmount)}</b></span>
-                            <span className="text-teal-600 font-extrabold">Laba Kotor: +{formatRp(gp)}</span>
+                            <span className="text-teal-500 font-extrabold">Laba Kotor: +{formatRp(gp)}</span>
                           </div>
                         </div>
                       );
@@ -1583,7 +1586,7 @@ export default function App() {
                 <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-4 space-y-3 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="font-extrabold text-sm">Posisi Neraca Usaha</span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600">SEIMBANG</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-500">SEIMBANG</span>
                   </div>
                   <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3 rounded-xl space-y-1.5">
                     <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-extrabold uppercase block">AKTIVA (HARTA USAHA)</span>
@@ -1591,7 +1594,7 @@ export default function App() {
                     <div className="flex justify-between"><span>Piutang Usaha</span><strong>{formatRp(balanceData.unpaidAr)}</strong></div>
                     <div className="flex justify-between"><span>Persediaan Stok Buah</span><strong>{formatRp(balanceData.inv)}</strong></div>
                     <div style={{ borderColor: 'var(--border-color)' }} className="flex justify-between pt-1.5 border-t font-extrabold">
-                      <span>Total Aktiva</span><strong className="text-emerald-600">{formatRp(balanceData.totalAssets)}</strong>
+                      <span>Total Aktiva</span><strong className="text-emerald-500">{formatRp(balanceData.totalAssets)}</strong>
                     </div>
                   </div>
                   <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3 rounded-xl space-y-1.5">
@@ -1599,7 +1602,7 @@ export default function App() {
                     <div className="flex justify-between"><span>Modal Disetor Awal</span><strong>{formatRp(balanceData.capIn)}</strong></div>
                     <div className="flex justify-between"><span>Laba Bersih Akumulasi</span><strong>{formatRp(balanceData.net)}</strong></div>
                     <div style={{ borderColor: 'var(--border-color)' }} className="flex justify-between pt-1.5 border-t font-extrabold">
-                      <span>Total Pasiva</span><strong className="text-emerald-600">{formatRp(balanceData.totalEquity)}</strong>
+                      <span>Total Pasiva</span><strong className="text-emerald-500">{formatRp(balanceData.totalEquity)}</strong>
                     </div>
                   </div>
                 </div>
@@ -1625,7 +1628,7 @@ export default function App() {
                           <strong className="block">{t.desc}</strong>
                           <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">{t.date}</span>
                         </div>
-                        <strong className={t.dir === 'in' ? 'text-emerald-600' : 'text-rose-500'}>
+                        <strong className={t.dir === 'in' ? 'text-emerald-500' : 'text-rose-500'}>
                           {t.dir === 'in' ? '+' : '-'}{formatRp(t.amount)}
                         </strong>
                       </div>
@@ -1718,7 +1721,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setBulkRows([...bulkRows, { fruitId: 'NEW', customName: '', unit: 'kg', qty: 1, buyPrice: '', sellPrice: '' }])}
-                    className="text-emerald-600 font-extrabold"
+                    className="text-emerald-500 font-extrabold"
                   >
                     + Tambah Baris
                   </button>
@@ -1749,7 +1752,7 @@ export default function App() {
                         ))}
                       </select>
                       {bulkRows.length > 1 && (
-                        <button type="button" onClick={() => setBulkRows(bulkRows.filter((_, i) => i !== idx))} className="px-2 rounded-lg bg-rose-500/15 text-rose-600 font-bold">
+                        <button type="button" onClick={() => setBulkRows(bulkRows.filter((_, i) => i !== idx))} className="px-2 rounded-lg bg-rose-500/15 text-rose-500 font-bold">
                           x
                         </button>
                       )}
@@ -1815,7 +1818,7 @@ export default function App() {
                           const f = fruits[0];
                           if (f) setBundleItems([...bundleItems, { fruitId: f.id, fruitName: f.name, qty: 0.5, unit: f.unit, buyPrice: f.buyPrice, sellPrice: f.sellPrice }]);
                         }}
-                        className="text-emerald-600 font-extrabold"
+                        className="text-emerald-500 font-extrabold"
                       >
                         + Tambah Buah
                       </button>
@@ -1864,8 +1867,8 @@ export default function App() {
 
                 <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3 rounded-xl flex justify-between">
                   <div><span className="text-[10px] block">Modal</span><strong>{formatRp(orderCalc.totalCost)}</strong></div>
-                  <div><span className="text-[10px] block">Harga Jual</span><strong className="text-emerald-600">{formatRp(orderCalc.finalSell)}</strong></div>
-                  <div><span className="text-[10px] block">Est. Laba</span><strong className="text-teal-600">{formatRp(orderCalc.profit)}</strong></div>
+                  <div><span className="text-[10px] block">Harga Jual</span><strong className="text-emerald-500">{formatRp(orderCalc.finalSell)}</strong></div>
+                  <div><span className="text-[10px] block">Est. Laba</span><strong className="text-teal-500">{formatRp(orderCalc.profit)}</strong></div>
                 </div>
 
                 <input placeholder="Catatan Paket (Opsional)" value={orderNotes} onChange={(e) => setOrderNotes(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
