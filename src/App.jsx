@@ -95,7 +95,7 @@ const FRESH_MODES = {
 };
 
 // ============================================================================
-// 3. KOMPONEN UTAMA APLIKASI
+// 3. KOMPONEN UTAMA APLIKASI MFRUITS
 // ============================================================================
 export default function App() {
   const [user, setUser] = useState(null);
@@ -110,7 +110,7 @@ export default function App() {
   // Mode Terang / Gelap
   const [colorMode, setColorMode] = useState(() => {
     try {
-      return localStorage.getItem('buahsegar_fresh_mode') || 'light';
+      return localStorage.getItem('mfruits_fresh_mode') || 'light';
     } catch {
       return 'light';
     }
@@ -119,7 +119,7 @@ export default function App() {
   const toggleColorMode = (mode) => {
     setColorMode(mode);
     try {
-      localStorage.setItem('buahsegar_fresh_mode', mode);
+      localStorage.setItem('mfruits_fresh_mode', mode);
     } catch {}
   };
 
@@ -337,7 +337,7 @@ export default function App() {
   const copyShoppingListWA = () => {
     if (metrics.shoppingList.length === 0) return showToast('Tidak ada daftar belanja yang kurang.');
     const lines = [
-      '*DAFTAR BELANJA BUAH SUPPLIER*',
+      '*DAFTAR BELANJA BUAH SUPPLIER — MFRUITS*',
       ...metrics.shoppingList.map((it, i) => `${i + 1}. ${it.fruitName}: *${it.deficit} ${it.unit}* (Est. ${formatRp(it.estCost)})`),
       `*Total Estimasi:* ${formatRp(metrics.totalShoppingCost)}`
     ];
@@ -542,7 +542,7 @@ export default function App() {
         : '• (Belum ada rekening tersimpan)';
 
     const msg = [
-      `Halo Kak *${o.customer}*, berikut rincian pesanan buahnya ya:`,
+      `Halo Kak *${o.customer}*, berikut rincian pesanan buahnya di *MFruits* ya:`,
       '',
       itemsText,
       o.notes ? `_Catatan: ${o.notes}_` : '',
@@ -552,7 +552,7 @@ export default function App() {
       'Pembayaran bisa ditransfer ke rekening berikut:',
       banksText,
       '',
-      'Terima kasih!'
+      'Terima kasih sudah berbelanja di *MFruits*!'
     ]
       .filter((line) => line !== '')
       .join('\n');
@@ -757,17 +757,17 @@ export default function App() {
           </div>
         )}
 
-        {/* HEADER FRESH + SWITCHER MODE TERANG / GELAP */}
+        {/* HEADER MFRUITS + SWITCHER MODE TERANG / GELAP */}
         <header style={{ background: 'var(--header-grad)' }} className="px-4 pt-4 pb-5 text-white rounded-b-[1.75rem] shadow-md sticky top-0 z-30">
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center font-extrabold text-sm">
-                BS
+              <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center font-extrabold text-sm tracking-tight">
+                MF
               </div>
               <div>
-                <h1 className="font-extrabold text-base leading-tight">BuahSegar Mobile</h1>
+                <h1 className="font-extrabold text-base leading-tight tracking-tight">MFruits</h1>
                 <p className="text-[11px] text-white/80 font-medium">
-                  {dbError ? 'Error Firebase' : user ? 'Cloud Firestore Aktif' : 'Menghubungkan...'}
+                  {dbError ? 'Error Firebase' : user ? 'Stok, Order & Pembukuan' : 'Menghubungkan...'}
                 </p>
               </div>
             </div>
@@ -943,7 +943,7 @@ export default function App() {
             <section className="space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <h2 className="text-base font-extrabold">Stok Buah di Rumah</h2>
+                  <h2 className="text-base font-extrabold">Stok Buah MFruits</h2>
                   <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Kelola persediaan & harga beli modal</p>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -1279,7 +1279,7 @@ export default function App() {
             <section className="space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <h2 className="text-base font-extrabold">Laporan Keuangan</h2>
+                  <h2 className="text-base font-extrabold">Laporan Keuangan MFruits</h2>
                   <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Penjualan, Laba Rugi, Neraca & Kas</p>
                 </div>
                 <button
