@@ -27,10 +27,10 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const APP_ID = 'Mfruits-mobile-v1';
+const APP_ID = 'buahsegar-mobile-v1';
 
 // ============================================================================
-// 2. DATA DEFAULT & HELPER
+// 2. HELPER TANGGAL, FORMAT RUPIAH & FILTER PERIODE
 // ============================================================================
 function getTodayDateStr() {
   const d = new Date();
@@ -59,95 +59,6 @@ function isDateInPeriod(dateStr, period) {
   }
   return true;
 }
-
-const DEFAULT_DATA = {
-  fruits: [
-    { id: 'f1', name: 'Sunkist Navel Aust', unit: 'kg', buyPrice: 38000, sellPrice: 48000, stock: 3.5, minStock: 1.5 },
-    { id: 'f2', name: 'Pear Forelle', unit: 'pax (isi 6)', buyPrice: 32000, sellPrice: 42000, stock: 4, minStock: 2 },
-    { id: 'f3', name: 'Pir Century', unit: 'kg', buyPrice: 30000, sellPrice: 38000, stock: 4.5, minStock: 2 },
-    { id: 'f4', name: 'Klengkeng Gold', unit: '500gr', buyPrice: 22000, sellPrice: 28000, stock: 3, minStock: 2 },
-    { id: 'f5', name: 'Rock Melon', unit: 'kg', buyPrice: 25000, sellPrice: 33000, stock: 2.5, minStock: 1.5 },
-    { id: 'f6', name: 'NasHon', unit: 'pc', buyPrice: 25000, sellPrice: 33000, stock: 2, minStock: 2 },
-    { id: 'f7', name: 'Jeruk Santang', unit: 'kg', buyPrice: 28000, sellPrice: 36000, stock: 0, minStock: 1.5 },
-    { id: 'f8', name: 'Anggur Muscat', unit: '500gr', buyPrice: 35000, sellPrice: 45000, stock: 0, minStock: 2 },
-    { id: 'f9', name: 'Apel Fuji Premium', unit: 'kg', buyPrice: 34000, sellPrice: 44000, stock: 0, minStock: 1.5 }
-  ],
-  orders: [
-    {
-      id: 'o1',
-      customer: 'Pelanggan 1 (WA)',
-      status: 'confirmed',
-      paymentStatus: 'unpaid',
-      notes: 'Jeruk Santang 1kg',
-      items: [{ fruitId: 'f7', fruitName: 'Jeruk Santang', qty: 1, unit: 'kg', buyPrice: 28000, sellPrice: 36000 }],
-      totalCost: 28000,
-      totalSell: 36000
-    },
-    {
-      id: 'o2',
-      customer: 'Pelanggan 2 (2 Paket Bundling)',
-      status: 'confirmed',
-      paymentStatus: 'unpaid',
-      notes: 'Bundling Pir 1kg, Anggur Muscat 500gr, Klengkeng 500gr (x2)',
-      items: [
-        { fruitId: 'f3', fruitName: 'Pir Century', qty: 2, unit: 'kg', buyPrice: 30000, sellPrice: 38000 },
-        { fruitId: 'f8', fruitName: 'Anggur Muscat', qty: 2, unit: '500gr', buyPrice: 35000, sellPrice: 45000 },
-        { fruitId: 'f4', fruitName: 'Klengkeng Gold', qty: 2, unit: '500gr', buyPrice: 22000, sellPrice: 28000 }
-      ],
-      totalCost: 174000,
-      totalSell: 222000
-    },
-    {
-      id: 'o3',
-      customer: 'Request A (Pir-Anggur-Jeruk)',
-      status: 'request',
-      paymentStatus: 'unpaid',
-      notes: 'Pir 500gr, Anggur Muscat 500gr, Jeruk Santang 500gr',
-      items: [
-        { fruitId: 'f3', fruitName: 'Pir Century', qty: 0.5, unit: 'kg', buyPrice: 30000, sellPrice: 38000 },
-        { fruitId: 'f8', fruitName: 'Anggur Muscat', qty: 1, unit: '500gr', buyPrice: 35000, sellPrice: 45000 },
-        { fruitId: 'f7', fruitName: 'Jeruk Santang', qty: 0.5, unit: 'kg', buyPrice: 28000, sellPrice: 36000 }
-      ],
-      totalCost: 64000,
-      totalSell: 82000
-    },
-    {
-      id: 'o4',
-      customer: 'Request B (Pir-Apel-Jeruk)',
-      status: 'request',
-      paymentStatus: 'unpaid',
-      notes: 'Pir 500gr, Apel 500gr, Jeruk 500gr',
-      items: [
-        { fruitId: 'f3', fruitName: 'Pir Century', qty: 0.5, unit: 'kg', buyPrice: 30000, sellPrice: 38000 },
-        { fruitId: 'f9', fruitName: 'Apel Fuji Premium', qty: 0.5, unit: 'kg', buyPrice: 34000, sellPrice: 44000 },
-        { fruitId: 'f7', fruitName: 'Jeruk Santang', qty: 0.5, unit: 'kg', buyPrice: 28000, sellPrice: 36000 }
-      ],
-      totalCost: 46000,
-      totalSell: 59000
-    },
-    {
-      id: 'o5',
-      customer: 'Request C (Pir-Apel-Anggur)',
-      status: 'request',
-      paymentStatus: 'unpaid',
-      notes: 'Pir 500gr, Apel 500gr, Anggur Muscat 500gr',
-      items: [
-        { fruitId: 'f3', fruitName: 'Pir Century', qty: 0.5, unit: 'kg', buyPrice: 30000, sellPrice: 38000 },
-        { fruitId: 'f9', fruitName: 'Apel Fuji Premium', qty: 0.5, unit: 'kg', buyPrice: 34000, sellPrice: 44000 },
-        { fruitId: 'f8', fruitName: 'Anggur Muscat', qty: 1, unit: '500gr', buyPrice: 35000, sellPrice: 45000 }
-      ],
-      totalCost: 67000,
-      totalSell: 86000
-    }
-  ],
-  bankAccounts: [
-    { id: 'b1', bank: 'BCA', number: '8820192837', holder: 'Mfruits Store' },
-    { id: 'b2', bank: 'SeaBank / GoPay', number: '081234567890', holder: 'Mfruits Store' }
-  ],
-  transactions: [
-    { id: 't1', type: 'capital', date: getTodayDateStr(), desc: 'Modal Awal Usaha & Persediaan Rumah', amount: 750000 }
-  ]
-};
 
 // ============================================================================
 // TEMA FRESH: MODE TERANG & MODE GELAP
@@ -188,7 +99,6 @@ const FRESH_MODES = {
 // ============================================================================
 export default function App() {
   const [user, setUser] = useState(null);
-  const [loadingDb, setLoadingDb] = useState(true);
   const [dbError, setDbError] = useState('');
 
   // Firestore collections
@@ -197,10 +107,10 @@ export default function App() {
   const [bankAccounts, setBankAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
 
-  // Mode Terang / Gelap (tersimpan otomatis di localStorage)
+  // Mode Terang / Gelap
   const [colorMode, setColorMode] = useState(() => {
     try {
-      return localStorage.getItem('Mfruits_fresh_mode') || 'light';
+      return localStorage.getItem('buahsegar_fresh_mode') || 'light';
     } catch {
       return 'light';
     }
@@ -209,7 +119,7 @@ export default function App() {
   const toggleColorMode = (mode) => {
     setColorMode(mode);
     try {
-      localStorage.setItem('Mfruits_fresh_mode', mode);
+      localStorage.setItem('buahsegar_fresh_mode', mode);
     } catch {}
   };
 
@@ -275,7 +185,6 @@ export default function App() {
   useEffect(() => {
     signInAnonymously(auth).catch((err) => {
       setDbError(err.message);
-      setLoadingDb(false);
     });
 
     const unsubAuth = onAuthStateChanged(auth, (u) => {
@@ -290,7 +199,6 @@ export default function App() {
 
     const unsubFruits = onSnapshot(collection(db, `${base}/fruits`), (snap) => {
       setFruits(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setLoadingDb(false);
     });
 
     const unsubOrders = onSnapshot(collection(db, `${base}/orders`), (snap) => {
@@ -318,17 +226,6 @@ export default function App() {
   }, [user]);
 
   const userDoc = (colName, id) => doc(db, `artifacts/${APP_ID}/users/${user.uid}/${colName}`, id);
-
-  const seedDemoToFirestore = async () => {
-    if (!user) return;
-    const batch = writeBatch(db);
-    DEFAULT_DATA.fruits.forEach((f) => batch.set(userDoc('fruits', f.id), f));
-    DEFAULT_DATA.orders.forEach((o, i) => batch.set(userDoc('orders', o.id), { ...o, createdAt: Date.now() - i * 1000 }));
-    DEFAULT_DATA.bankAccounts.forEach((b) => batch.set(userDoc('bankAccounts', b.id), b));
-    DEFAULT_DATA.transactions.forEach((t, i) => batch.set(userDoc('transactions', t.id), { ...t, createdAt: Date.now() - i * 1000 }));
-    await batch.commit();
-    showToast('Data stok & pesanan awal berhasil dimuat ke Firestore!');
-  };
 
   // ==========================================================================
   // 5. KALKULASI METRIK UTAMA
@@ -865,21 +762,15 @@ export default function App() {
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center font-extrabold text-sm">
-                MF
+                BS
               </div>
               <div>
-                <h1 className="font-extrabold text-base leading-tight">Mfruits Mobile</h1>
+                <h1 className="font-extrabold text-base leading-tight">BuahSegar Mobile</h1>
                 <p className="text-[11px] text-white/80 font-medium">
                   {dbError ? 'Error Firebase' : user ? 'Cloud Firestore Aktif' : 'Menghubungkan...'}
                 </p>
               </div>
             </div>
-            <button
-              onClick={seedDemoToFirestore}
-              className="px-2.5 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-[11px] font-semibold"
-            >
-              Muat Data Awal
-            </button>
           </div>
 
           {/* Switcher Mode Terang & Gelap */}
@@ -908,20 +799,6 @@ export default function App() {
           {dbError && (
             <div className="p-3 rounded-2xl bg-rose-500/15 border border-rose-500 text-rose-600 text-xs font-semibold">
               {dbError}
-            </div>
-          )}
-
-          {/* EMPTY PROMPT JIKA BELUM ADA DATA DI FIRESTORE */}
-          {!loadingDb && fruits.length === 0 && orders.length === 0 && (
-            <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-4 text-center space-y-2.5">
-              <p className="text-xs font-bold">Database Firestore masih kosong.</p>
-              <button
-                onClick={seedDemoToFirestore}
-                style={{ backgroundColor: 'var(--accent)' }}
-                className="px-4 py-2 rounded-xl text-white text-xs font-extrabold"
-              >
-                + Isi Stok & Order Awal Sekarang
-              </button>
             </div>
           )}
 
@@ -1108,60 +985,66 @@ export default function App() {
                 ))}
               </div>
 
-              <div className="space-y-2.5">
-                {fruits
-                  .filter((f) =>
-                    stockFilter === 'low'
-                      ? Number(f.stock) <= Number(f.minStock)
-                      : stockFilter === 'ready'
-                      ? Number(f.stock) > Number(f.minStock)
-                      : true
-                  )
-                  .map((f) => {
-                    const empty = Number(f.stock) <= 0;
-                    const low = Number(f.stock) <= Number(f.minStock);
-                    return (
-                      <div key={f.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3.5 space-y-2.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="flex items-center gap-1.5">
-                              <strong className="text-sm font-extrabold">{f.name}</strong>
-                              {empty ? (
-                                <span className="px-1.5 py-0.5 rounded bg-rose-500 text-white text-[9px] font-bold">HABIS</span>
-                              ) : low ? (
-                                <span className="px-1.5 py-0.5 rounded bg-amber-500 text-white text-[9px] font-bold">MENIPIS</span>
-                              ) : null}
+              {fruits.length === 0 ? (
+                <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
+                  Belum ada data stok buah. Tekan <b>+ Belanja Stok</b> atau <b>+ Buah</b> untuk mulai mengisi.
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {fruits
+                    .filter((f) =>
+                      stockFilter === 'low'
+                        ? Number(f.stock) <= Number(f.minStock)
+                        : stockFilter === 'ready'
+                        ? Number(f.stock) > Number(f.minStock)
+                        : true
+                    )
+                    .map((f) => {
+                      const empty = Number(f.stock) <= 0;
+                      const low = Number(f.stock) <= Number(f.minStock);
+                      return (
+                        <div key={f.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3.5 space-y-2.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <strong className="text-sm font-extrabold">{f.name}</strong>
+                                {empty ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-500 text-white text-[9px] font-bold">HABIS</span>
+                                ) : low ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-500 text-white text-[9px] font-bold">MENIPIS</span>
+                                ) : null}
+                              </div>
+                              <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">
+                                Modal: <b>{formatRp(f.buyPrice)}</b>/{f.unit} • Jual: <b className="text-emerald-500">{formatRp(f.sellPrice)}</b>
+                              </span>
                             </div>
-                            <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">
-                              Modal: <b>{formatRp(f.buyPrice)}</b>/{f.unit} • Jual: <b className="text-emerald-500">{formatRp(f.sellPrice)}</b>
+                            <div className="flex items-center gap-1">
+                              <button onClick={() => openFruitModal(f)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-2 py-1 rounded-lg text-[11px] font-bold">
+                                Edit
+                              </button>
+                              <button onClick={() => deleteFruit(f.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
+                                Hapus
+                              </button>
+                            </div>
+                          </div>
+                          <div style={{ borderColor: 'var(--border-color)' }} className="flex items-center justify-between pt-2 border-t">
+                            <span className={`text-xs font-extrabold ${empty ? 'text-rose-500' : ''}`}>
+                              Stok: {f.stock} {f.unit}
                             </span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => openFruitModal(f)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-2 py-1 rounded-lg text-[11px] font-bold">
-                              Edit
-                            </button>
-                            <button onClick={() => deleteFruit(f.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
-                              Hapus
-                            </button>
-                          </div>
-                        </div>
-                        <div style={{ borderColor: 'var(--border-color)' }} className="flex items-center justify-between pt-2 border-t">
-                          <span className={`text-xs font-extrabold ${empty ? 'text-rose-500' : ''}`}>
-                            Stok: {f.stock} {f.unit}
-                          </span>
-                          <div className="flex items-center gap-1.5">
-                            <button onClick={() => adjustStock(f.id, -0.5, false)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-8 h-8 rounded-xl font-extrabold text-sm">
-                              -0.5
-                            </button>
-                            <button onClick={() => adjustStock(f.id, 1, true)} style={{ backgroundColor: 'var(--accent)' }} className="px-3 h-8 rounded-xl text-white text-xs font-bold">
-                              +1 Beli
-                            </button>
+                            <div className="flex items-center gap-1.5">
+                              <button onClick={() => adjustStock(f.id, -0.5, false)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-8 h-8 rounded-xl font-extrabold text-sm">
+                                -0.5
+                              </button>
+                              <button onClick={() => adjustStock(f.id, 1, true)} style={{ backgroundColor: 'var(--accent)' }} className="px-3 h-8 rounded-xl text-white text-xs font-bold">
+                                +1 Beli
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-              </div>
+                      );
+                    })}
+                </div>
+              )}
             </section>
           )}
 
@@ -1182,101 +1065,107 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="space-y-3">
-                {orders.map((o) => {
-                  const isDone = o.status === 'completed';
-                  const isReq = o.status === 'request';
-                  const profit = Number(o.totalSell) - Number(o.totalCost);
+              {orders.length === 0 ? (
+                <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
+                  Belum ada daftar pesanan. Tekan <b>+ Order Baru</b> di kanan bawah untuk mencatat order.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {orders.map((o) => {
+                    const isDone = o.status === 'completed';
+                    const isReq = o.status === 'request';
+                    const profit = Number(o.totalSell) - Number(o.totalCost);
 
-                  return (
-                    <div
-                      key={o.id}
-                      style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }}
-                      className={`border rounded-2xl p-4 space-y-3 ${isDone ? 'opacity-75' : ''}`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                isDone
-                                  ? 'bg-slate-500/15 text-slate-400'
-                                  : isReq
-                                  ? 'bg-amber-500/15 text-amber-500'
-                                  : 'bg-emerald-500/15 text-emerald-500'
-                              }`}
-                            >
-                              {isDone ? 'Selesai' : isReq ? 'Request Paket' : 'Pesanan Pasti'}
-                            </span>
-                            {isDone && (
-                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold text-white ${o.paymentStatus === 'paid' ? 'bg-emerald-600' : 'bg-amber-500'}`}>
-                                {o.paymentStatus === 'paid' ? 'LUNAS' : 'PIUTANG'}
-                              </span>
-                            )}
-                          </div>
-                          <h3 className="text-sm font-extrabold mt-1">{o.customer}</h3>
-                          <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">{o.notes}</p>
-                        </div>
-                        <button onClick={() => deleteOrder(o.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
-                          Hapus
-                        </button>
-                      </div>
-
-                      <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl space-y-1 text-xs">
-                        {(o.items || []).map((it, idx) => (
-                          <div key={idx} className="flex justify-between">
-                            <span>{it.fruitName} ({it.qty} {it.unit})</span>
-                            <span style={{ color: 'var(--text-muted)' }}>Modal {formatRp(it.qty * it.buyPrice)}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="flex items-center justify-between text-xs pt-1">
-                        <div>
-                          <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block">Modal / Jual</span>
-                          <strong>{formatRp(o.totalCost)} / <span className="text-emerald-500">{formatRp(o.totalSell)}</span></strong>
-                        </div>
-                        <div className="text-right">
-                          <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block">Est. Laba</span>
-                          <strong className="text-teal-500">+{formatRp(profit)}</strong>
-                        </div>
-                      </div>
-
-                      <div className="space-y-2 pt-1">
-                        <button
-                          onClick={() => copyOrderPaymentWA(o)}
-                          style={{ backgroundColor: 'var(--bg-card-sub)', borderColor: 'var(--border-color)' }}
-                          className="w-full py-2 rounded-xl border text-xs font-bold"
-                        >
-                          Salin Rincian Pembayaran WA
-                        </button>
-                        {!isDone && (
-                          <div className="flex items-center gap-2">
-                            {isReq && (
-                              <button
-                                onClick={() => updateDoc(userDoc('orders', o.id), { status: 'confirmed' })}
-                                className="flex-1 py-2.5 rounded-xl bg-amber-500 text-white text-xs font-extrabold"
+                    return (
+                      <div
+                        key={o.id}
+                        style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }}
+                        className={`border rounded-2xl p-4 space-y-3 ${isDone ? 'opacity-75' : ''}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                                  isDone
+                                    ? 'bg-slate-500/15 text-slate-400'
+                                    : isReq
+                                    ? 'bg-amber-500/15 text-amber-500'
+                                    : 'bg-emerald-500/15 text-emerald-500'
+                                }`}
                               >
-                                Deal Request
-                              </button>
-                            )}
-                            <button
-                              onClick={() => {
-                                setCompleteOrderTarget(o);
-                                setCompleteDate(getTodayDateStr());
-                              }}
-                              style={{ backgroundColor: 'var(--accent)' }}
-                              className="flex-1 py-2.5 rounded-xl text-white text-xs font-extrabold"
-                            >
-                              Selesai & Potong Stok
-                            </button>
+                                {isDone ? 'Selesai' : isReq ? 'Request Paket' : 'Pesanan Pasti'}
+                              </span>
+                              {isDone && (
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold text-white ${o.paymentStatus === 'paid' ? 'bg-emerald-600' : 'bg-amber-500'}`}>
+                                  {o.paymentStatus === 'paid' ? 'LUNAS' : 'PIUTANG'}
+                                </span>
+                              )}
+                            </div>
+                            <h3 className="text-sm font-extrabold mt-1">{o.customer}</h3>
+                            <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">{o.notes}</p>
                           </div>
-                        )}
+                          <button onClick={() => deleteOrder(o.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
+                            Hapus
+                          </button>
+                        </div>
+
+                        <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl space-y-1 text-xs">
+                          {(o.items || []).map((it, idx) => (
+                            <div key={idx} className="flex justify-between">
+                              <span>{it.fruitName} ({it.qty} {it.unit})</span>
+                              <span style={{ color: 'var(--text-muted)' }}>Modal {formatRp(it.qty * it.buyPrice)}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="flex items-center justify-between text-xs pt-1">
+                          <div>
+                            <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block">Modal / Jual</span>
+                            <strong>{formatRp(o.totalCost)} / <span className="text-emerald-500">{formatRp(o.totalSell)}</span></strong>
+                          </div>
+                          <div className="text-right">
+                            <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block">Est. Laba</span>
+                            <strong className="text-teal-500">+{formatRp(profit)}</strong>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2 pt-1">
+                          <button
+                            onClick={() => copyOrderPaymentWA(o)}
+                            style={{ backgroundColor: 'var(--bg-card-sub)', borderColor: 'var(--border-color)' }}
+                            className="w-full py-2 rounded-xl border text-xs font-bold"
+                          >
+                            Salin Rincian Pembayaran WA
+                          </button>
+                          {!isDone && (
+                            <div className="flex items-center gap-2">
+                              {isReq && (
+                                <button
+                                  onClick={() => updateDoc(userDoc('orders', o.id), { status: 'confirmed' })}
+                                  className="flex-1 py-2.5 rounded-xl bg-amber-500 text-white text-xs font-extrabold"
+                                >
+                                  Deal Request
+                                </button>
+                              )}
+                              <button
+                                onClick={() => {
+                                  setCompleteOrderTarget(o);
+                                  setCompleteDate(getTodayDateStr());
+                                }}
+                                style={{ backgroundColor: 'var(--accent)' }}
+                                className="flex-1 py-2.5 rounded-xl text-white text-xs font-extrabold"
+                              >
+                                Selesai & Potong Stok
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </section>
           )}
 
@@ -1302,28 +1191,34 @@ export default function App() {
                   <span className="text-xs font-extrabold">Informasi Rekening Pembayaran</span>
                   <span style={{ color: 'var(--text-muted)' }} className="text-[10px]">Tap salin untuk WA</span>
                 </div>
-                <div className="space-y-2">
-                  {bankAccounts.map((b) => (
-                    <div key={b.id} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl flex items-center justify-between gap-2 text-xs">
-                      <div>
-                        <strong className="block">{b.bank} — {b.number}</strong>
-                        <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">a.n. {b.holder}</span>
+                {bankAccounts.length === 0 ? (
+                  <div style={{ backgroundColor: 'var(--bg-card-sub)', color: 'var(--text-muted)' }} className="p-3 rounded-xl text-center text-xs">
+                    Belum ada rekening. Tekan <b>+ Rekening</b> di atas untuk menambahkan.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {bankAccounts.map((b) => (
+                      <div key={b.id} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl flex items-center justify-between gap-2 text-xs">
+                        <div>
+                          <strong className="block">{b.bank} — {b.number}</strong>
+                          <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">a.n. {b.holder}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => copyTextSafe(`${b.bank} ${b.number} a.n. ${b.holder}`, 'No. Rekening disalin!')}
+                            style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }}
+                            className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold"
+                          >
+                            Salin
+                          </button>
+                          <button onClick={() => deleteDoc(userDoc('bankAccounts', b.id))} className="px-2 py-1.5 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
+                            x
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => copyTextSafe(`${b.bank} ${b.number} a.n. ${b.holder}`, 'No. Rekening disalin!')}
-                          style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }}
-                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold"
-                        >
-                          Salin
-                        </button>
-                        <button onClick={() => deleteDoc(userDoc('bankAccounts', b.id))} className="px-2 py-1.5 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
-                          x
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {(() => {
