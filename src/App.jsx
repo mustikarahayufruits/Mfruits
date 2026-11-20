@@ -865,7 +865,7 @@ export default function App() {
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center font-extrabold text-sm">
-                BS
+                MF
               </div>
               <div>
                 <h1 className="font-extrabold text-base leading-tight">Mfruits Mobile</h1>
