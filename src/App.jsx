@@ -95,6 +95,56 @@ const FRESH_MODES = {
 };
 
 // ============================================================================
+// IKON NAVIGASI BAWAH
+// ============================================================================
+function NavIcon({ id }) {
+  switch (id) {
+    case 'home':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 10.5L12 3l9 7.5" />
+          <path d="M5 9.5V19a1 1 0 001 1h12a1 1 0 001-1V9.5" />
+          <path d="M9 20v-6h6v6" />
+        </svg>
+      );
+    case 'stock':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 8l-9-5-9 5v8l9 5 9-5V8z" />
+          <path d="M3.3 8.2L12 13l8.7-4.8" />
+          <path d="M12 13v8" />
+        </svg>
+      );
+    case 'orders':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M6 7h12l1 12H5L6 7z" />
+          <path d="M9 7V5a3 3 0 016 0v2" />
+        </svg>
+      );
+    case 'receivables':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="6" width="18" height="13" rx="2.5" />
+          <path d="M16 12.5h.01" />
+          <path d="M3 10h18" />
+        </svg>
+      );
+    case 'finance':
+      return (
+        <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 19h16" />
+          <path d="M7 16v-5" />
+          <path d="M12 16V8" />
+          <path d="M17 16v-8" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
+// ============================================================================
 // 3. KOMPONEN UTAMA APLIKASI MFRUITS
 // ============================================================================
 export default function App() {
@@ -116,10 +166,11 @@ export default function App() {
     }
   });
 
-  const toggleColorMode = (mode) => {
-    setColorMode(mode);
+  const handleToggleColorMode = () => {
+    const nextMode = colorMode === 'light' ? 'dark' : 'light';
+    setColorMode(nextMode);
     try {
-      localStorage.setItem('mfruits_fresh_mode', mode);
+      localStorage.setItem('mfruits_fresh_mode', nextMode);
     } catch {}
   };
 
@@ -757,24 +808,21 @@ export default function App() {
           </div>
         )}
 
-        {/* HEADER MFRUITS + SWITCHER MODE TERANG / GELAP */}
-        <header style={{ background: 'var(--header-grad)' }} className="px-4 pt-4 pb-5 text-white rounded-b-[1.75rem] shadow-md sticky top-0 z-30">
-          <div className="flex items-center justify-between gap-2 mb-3">
-            <div className="flex items-center gap-2.5">
+        {/* HEADER MFRUITS + SINGLE TOGGLE MODE TERANG / GELAP */}
+        <header style={{ background: 'var(--header-grad)' }} className="px-4 py-4 text-white rounded-b-[1.75rem] shadow-md sticky top-0 z-30">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-3">
+              {/* Logo Buah-Buahan */}
               <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center shadow-inner shrink-0">
                 <svg viewBox="0 0 36 36" className="w-7 h-7" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  {/* Daun & Tangkai */}
                   <path d="M18 9C18 6 20.5 4 23 4.5C22.5 7 20.5 9 18 9Z" fill="#A7F3D0" />
                   <path d="M17.5 10V6.5" stroke="#ECFDF5" strokeWidth="1.8" strokeLinecap="round" />
-                  {/* Jeruk di belakang kiri */}
                   <circle cx="12.5" cy="18.5" r="6.5" fill="#FBBF24" />
                   <circle cx="10.5" cy="16.5" r="1.2" fill="#FEF3C7" opacity="0.8" />
-                  {/* Anggur di belakang kanan */}
                   <circle cx="24" cy="16" r="2.6" fill="#C084FC" />
                   <circle cx="27" cy="18.5" r="2.6" fill="#A855F7" />
                   <circle cx="23.5" cy="20.5" r="2.6" fill="#9333EA" />
                   <circle cx="26" cy="23" r="2.5" fill="#7E22CE" />
-                  {/* Apel merah utama di depan */}
                   <path
                     d="M18 13.5C15.2 12.2 11.5 14 11.5 18.2C11.5 23 14.8 27.5 18 27.5C21.2 27.5 24.5 23 24.5 18.2C24.5 14 20.8 12.2 18 13.5Z"
                     fill="#FB7185"
@@ -789,30 +837,38 @@ export default function App() {
               </div>
               <div>
                 <h1 className="font-extrabold text-base leading-tight tracking-tight">MFruits</h1>
-                <p className="text-[11px] text-white/80 font-medium">
-                  {dbError ? 'Error Firebase' : user ? 'Stok, Order & Pembukuan' : 'Menghubungkan...'}
+                <p className="text-[11px] text-white/85 font-medium">
+                  {dbError ? 'Error Firebase' : 'Manis Segar Menyehatkan'}
                 </p>
               </div>
             </div>
-          </div>
 
-          {/* Switcher Mode Terang & Gelap */}
-          <div className="bg-black/20 p-1 rounded-xl flex items-center justify-between gap-1 text-[11px] font-semibold">
+            {/* Tombol Tunggal Switch Bulan & Matahari */}
             <button
-              onClick={() => toggleColorMode('light')}
-              className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                colorMode === 'light' ? 'bg-white text-emerald-800 font-extrabold shadow' : 'text-white/80 hover:text-white'
-              }`}
+              onClick={handleToggleColorMode}
+              title={colorMode === 'light' ? 'Ganti ke Mode Gelap' : 'Ganti ke Mode Terang'}
+              aria-label="Ganti Tema Terang/Gelap"
+              className="w-10 h-10 rounded-xl bg-white/20 hover:bg-white/30 active:scale-95 transition-all flex items-center justify-center shadow-inner"
             >
-              <span>☀️ Mode Terang</span>
-            </button>
-            <button
-              onClick={() => toggleColorMode('dark')}
-              className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                colorMode === 'dark' ? 'bg-slate-900 text-emerald-400 font-extrabold shadow' : 'text-white/80 hover:text-white'
-              }`}
-            >
-              <span>🌙 Mode Gelap</span>
+              {colorMode === 'light' ? (
+                /* Ikon Bulan (klik untuk Mode Gelap) */
+                <svg viewBox="0 0 24 24" className="w-5 h-5 text-white" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </svg>
+              ) : (
+                /* Ikon Matahari (klik untuk Mode Terang) */
+                <svg viewBox="0 0 24 24" className="w-5 h-5 text-amber-300" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2" />
+                  <path d="M12 20v2" />
+                  <path d="m4.93 4.93 1.41 1.41" />
+                  <path d="m17.66 17.66 1.41 1.41" />
+                  <path d="M2 12h2" />
+                  <path d="M20 12h2" />
+                  <path d="m6.34 17.66-1.41 1.41" />
+                  <path d="m19.07 4.93-1.41 1.41" />
+                </svg>
+              )}
             </button>
           </div>
         </header>
@@ -1567,10 +1623,10 @@ export default function App() {
           + Order Baru
         </button>
 
-        {/* BOTTOM NAVIGATION */}
+        {/* BOTTOM NAVIGATION DENGAN IKON */}
         <nav
           style={{ backgroundColor: 'var(--nav-bg)', borderColor: 'var(--border-color)' }}
-          className="fixed bottom-0 w-full max-w-[440px] border-t backdrop-blur-md z-30 grid grid-cols-5 py-2 px-1 text-[10px] font-bold"
+          className="fixed bottom-0 w-full max-w-[440px] border-t backdrop-blur-md z-30 grid grid-cols-5 py-1.5 px-1 text-[10px] font-bold"
         >
           {[
             { id: 'home', label: 'Beranda' },
@@ -1587,8 +1643,9 @@ export default function App() {
                   ? { backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }
                   : { color: 'var(--text-muted)' }
               }
-              className="flex flex-col items-center gap-1 py-1.5 rounded-xl font-extrabold"
+              className="flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-xl font-extrabold transition-colors"
             >
+              <NavIcon id={n.id} />
               <span>{n.label}</span>
             </button>
           ))}
