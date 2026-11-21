@@ -2,10 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
-  signInAnonymously,
   onAuthStateChanged,
   GoogleAuthProvider,
-  linkWithPopup,
   signInWithPopup,
   signOut
 } from 'firebase/auth';
@@ -21,7 +19,7 @@ import {
 } from 'firebase/firestore';
 
 // ============================================================================
-// 1. KONFIGURASI FIREBASE (OTOMATIS MEMBACA ENVIRONMENT VARIABLES VERCEL)
+// 1. KONFIGURASI FIREBASE & DAFTAR EMAIL YANG DIIZINKAN (WHITELIST)
 // ============================================================================
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -31,6 +29,12 @@ const firebaseConfig = {
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
+
+// MASUKKAN EMAIL GOOGLE YANG DIIZINKAN MENGAKSES MFRUITS (HURUF KECIL SEMUA)
+const ALLOWED_EMAILS = [
+  'emailkamu@gmail.com',
+  'emailpartner@gmail.com'
+];
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -104,8 +108,57 @@ const FRESH_MODES = {
 };
 
 // ============================================================================
-// IKON NAVIGASI BAWAH
+// LOGO MFRUITS (OPSI 1B) & IKON NAVIGASI
 // ============================================================================
+function MFruitsLogo({ sizeClass = 'w-12 h-12 rounded-2xl p-1.5' }) {
+  return (
+    <div className={`${sizeClass} bg-[#d1fae5] flex items-center justify-center shadow-md shrink-0 overflow-hidden border border-white/40`}>
+      <svg viewBox="0 0 100 100" className="w-full h-full" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path
+          d="M16 74V36C16 24 25 18 34 25L50 38L66 25C75 18 84 24 84 36V74"
+          stroke="#065f46"
+          strokeWidth="22"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M16 74V36C16 24 25 18 34 25L50 38L66 25C75 18 84 24 84 36V74"
+          stroke="#10b981"
+          strokeWidth="15"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M16 74V52C20 44 27 42 33 46M67 46C73 42 80 44 84 52V74"
+          stroke="#facc15"
+          strokeWidth="15"
+          strokeLinecap="round"
+        />
+        <path
+          d="M50 44C50 33 59 27 68 29C67 38 59 44 50 44Z"
+          fill="#16a34a"
+          stroke="#065f46"
+          strokeWidth="2.5"
+          strokeLinejoin="round"
+        />
+        <path d="M52 42L63 32" stroke="#86efac" strokeWidth="2" strokeLinecap="round" />
+        <path
+          d="M50 48C43 44 33 48 33 59C33 71 41 81 50 79C59 81 67 71 67 59C67 48 57 44 50 48Z"
+          fill="#dc2626"
+          stroke="#7f1d1d"
+          strokeWidth="2.5"
+        />
+        <path
+          d="M50 51C45 48 37 51 37 59C37 68 43 76 50 74.5C57 76 63 68 63 59C63 51 55 48 50 51Z"
+          fill="#fefce8"
+        />
+        <ellipse cx="46.5" cy="62" rx="1.6" ry="2.8" transform="rotate(-15 46.5 62)" fill="#78350f" />
+        <ellipse cx="53.5" cy="62" rx="1.6" ry="2.8" transform="rotate(15 53.5 62)" fill="#78350f" />
+      </svg>
+    </div>
+  );
+}
+
 function NavIcon({ id }) {
   switch (id) {
     case 'home':
@@ -158,6 +211,8 @@ function NavIcon({ id }) {
 // ============================================================================
 export default function App() {
   const [user, setUser] = useState(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authError, setAuthError] = useState('');
   const [dbError, setDbError] = useState('');
 
   // Firestore collections
@@ -242,50 +297,44 @@ export default function App() {
   };
 
   // ==========================================================================
-  // 4. FIREBASE AUTH (ANONYMOUS + GOOGLE SYNC) & REALTIME LISTENERS
+  // 4. FIREBASE AUTH WHITELIST (HANYA EMAIL TERDAFTAR YANG BISA MASUK)
   // ==========================================================================
+  const isEmailAuthorized = (email) => {
+    if (!email) return false;
+    return ALLOWED_EMAILS.map((e) => e.trim().toLowerCase()).includes(email.trim().toLowerCase());
+  };
+
   useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, (u) => {
-      if (u) {
+    const unsubAuth = onAuthStateChanged(auth, async (u) => {
+      if (u && u.email && isEmailAuthorized(u.email)) {
         setUser(u);
+        setAuthError('');
+      } else if (u) {
+        // Jika login tapi email tidak terdaftar (atau sesi anonymous lama), langsung keluarkan
+        const rejectedEmail = u.email || 'Akun Tamu';
+        await signOut(auth);
+        setUser(null);
+        setAuthError(`Akses ditolak: Email (${rejectedEmail}) tidak terdaftar di sistem MFruits.`);
       } else {
-        signInAnonymously(auth).catch((err) => {
-          setDbError(err.message);
-        });
+        setUser(null);
       }
+      setAuthChecking(false);
     });
     return () => unsubAuth();
   }, []);
 
-  const handleGoogleSync = async () => {
-    if (!auth.currentUser) return;
+  const handleGoogleLogin = async () => {
+    setAuthError('');
     try {
-      if (auth.currentUser.isAnonymous) {
-        // Coba tautkan data lokal tamu ke akun Google agar data tidak hilang
-        const res = await linkWithPopup(auth.currentUser, googleProvider);
-        setUser({ ...res.user });
-        setAccountModalOpen(false);
-        showToast(`Tersinkronisasi dengan ${res.user.email}!`);
-      } else {
-        const res = await signInWithPopup(auth, googleProvider);
-        setUser(res.user);
-        setAccountModalOpen(false);
-        showToast(`Masuk sebagai ${res.user.email}`);
+      const res = await signInWithPopup(auth, googleProvider);
+      const email = res.user?.email || '';
+      if (!isEmailAuthorized(email)) {
+        await signOut(auth);
+        setUser(null);
+        setAuthError(`Akses ditolak: Email (${email}) tidak terdaftar. Hubungi admin MFruits.`);
       }
     } catch (err) {
-      if (err.code === 'auth/credential-already-in-use') {
-        // Jika akun Google sudah pernah dipakai di HP lain, langsung masuk ke akun tersebut
-        try {
-          const res = await signInWithPopup(auth, googleProvider);
-          setUser(res.user);
-          setAccountModalOpen(false);
-          showToast(`Berhasil memuat data dari ${res.user.email}!`);
-        } catch (e2) {
-          showToast('Gagal login Google: ' + e2.message);
-        }
-      } else {
-        showToast('Gagal sinkronisasi Google: ' + err.message);
-      }
+      setAuthError('Gagal masuk dengan Google: ' + err.message);
     }
   };
 
@@ -293,19 +342,27 @@ export default function App() {
     try {
       await signOut(auth);
       setAccountModalOpen(false);
-      showToast('Keluar dari akun Google.');
+      setUser(null);
     } catch (err) {
       showToast(err.message);
     }
   };
 
+  // ==========================================================================
+  // 5. REALTIME LISTENERS FIRESTORE (SHARED STORE DATA UNTUK EMAIL TERDAFTAR)
+  // ==========================================================================
   useEffect(() => {
     if (!user) return;
-    const base = `artifacts/${APP_ID}/users/${user.uid}`;
+    const base = `artifacts/${APP_ID}/users/mfruits_store`;
 
-    const unsubFruits = onSnapshot(collection(db, `${base}/fruits`), (snap) => {
-      setFruits(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
+    const unsubFruits = onSnapshot(
+      collection(db, `${base}/fruits`),
+      (snap) => {
+        setFruits(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setDbError('');
+      },
+      (err) => setDbError('Izin Firestore ditolak: ' + err.message)
+    );
 
     const unsubOrders = onSnapshot(collection(db, `${base}/orders`), (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -331,10 +388,10 @@ export default function App() {
     };
   }, [user]);
 
-  const userDoc = (colName, id) => doc(db, `artifacts/${APP_ID}/users/${user.uid}/${colName}`, id);
+  const storeDoc = (colName, id) => doc(db, `artifacts/${APP_ID}/users/mfruits_store/${colName}`, id);
 
   // ==========================================================================
-  // 5. KALKULASI METRIK UTAMA
+  // 6. KALKULASI METRIK UTAMA
   // ==========================================================================
   const metrics = useMemo(() => {
     const inventoryValue = fruits.reduce((s, f) => s + Number(f.stock || 0) * Number(f.buyPrice || 0), 0);
@@ -383,18 +440,18 @@ export default function App() {
   }, [fruits, orders, transactions]);
 
   // ==========================================================================
-  // 6. AKSI STOK & BELANJA
+  // 7. AKSI STOK & BELANJA
   // ==========================================================================
   const adjustStock = async (fruitId, delta, recordPurchase) => {
     const f = fruits.find((item) => item.id === fruitId);
     if (!f || !user) return;
     const newStock = Math.max(0, Number((Number(f.stock) + delta).toFixed(2)));
-    await updateDoc(userDoc('fruits', fruitId), { stock: newStock });
+    await updateDoc(storeDoc('fruits', fruitId), { stock: newStock });
 
     if (recordPurchase && delta > 0) {
       const cost = delta * Number(f.buyPrice);
       const tId = 't_' + Date.now();
-      await setDoc(userDoc('transactions', tId), {
+      await setDoc(storeDoc('transactions', tId), {
         id: tId,
         type: 'inventory_buy',
         date: getTodayDateStr(),
@@ -417,7 +474,7 @@ export default function App() {
       const fruit = fruits.find((f) => f.id === item.fruitId);
       if (fruit) {
         const qty = Math.ceil(item.deficit * 2) / 2;
-        batch.update(userDoc('fruits', fruit.id), {
+        batch.update(storeDoc('fruits', fruit.id), {
           stock: Number((Number(fruit.stock) + qty).toFixed(2))
         });
         totalSpent += qty * Number(fruit.buyPrice);
@@ -426,7 +483,7 @@ export default function App() {
 
     if (totalSpent > 0) {
       const tId = 't_' + Date.now();
-      batch.set(userDoc('transactions', tId), {
+      batch.set(storeDoc('transactions', tId), {
         id: tId,
         type: 'inventory_buy',
         date: getTodayDateStr(),
@@ -463,7 +520,7 @@ export default function App() {
     e.preventDefault();
     if (!user) return;
     const id = fruitForm.id || 'f_' + Date.now();
-    await setDoc(userDoc('fruits', id), {
+    await setDoc(storeDoc('fruits', id), {
       id,
       name: fruitForm.name.trim(),
       unit: fruitForm.unit.trim(),
@@ -478,7 +535,7 @@ export default function App() {
 
   const deleteFruit = async (fruitId) => {
     if (!user) return;
-    await deleteDoc(userDoc('fruits', fruitId));
+    await deleteDoc(storeDoc('fruits', fruitId));
     showToast('Item buah dihapus.');
   };
 
@@ -523,7 +580,7 @@ export default function App() {
           r.sellPrice !== '' && Number(r.sellPrice) > 0 ? Number(r.sellPrice) : Math.round(buyPrice * 1.25);
 
         if (existing) {
-          batch.update(userDoc('fruits', existing.id), {
+          batch.update(storeDoc('fruits', existing.id), {
             stock: Number((Number(existing.stock) + qty).toFixed(2)),
             ...(buyPrice > 0 ? { buyPrice } : {}),
             ...(r.sellPrice !== '' && Number(r.sellPrice) > 0 ? { sellPrice: Number(r.sellPrice) } : {})
@@ -531,7 +588,7 @@ export default function App() {
           summaryNames.push(`${existing.name} (${qty} ${existing.unit})`);
         } else {
           const newId = 'f_' + Date.now() + '_' + idx;
-          batch.set(userDoc('fruits', newId), {
+          batch.set(storeDoc('fruits', newId), {
             id: newId,
             name: cleanName,
             unit: cleanUnit,
@@ -546,7 +603,7 @@ export default function App() {
       } else {
         const found = fruits.find((f) => f.id === r.fruitId);
         if (found) {
-          batch.update(userDoc('fruits', found.id), {
+          batch.update(storeDoc('fruits', found.id), {
             stock: Number((Number(found.stock) + qty).toFixed(2)),
             ...(buyPrice > 0 ? { buyPrice } : {}),
             ...(r.sellPrice !== '' && Number(r.sellPrice) > 0 ? { sellPrice: Number(r.sellPrice) } : {})
@@ -558,7 +615,7 @@ export default function App() {
 
     if (grandTotal > 0) {
       const tId = 't_' + Date.now();
-      batch.set(userDoc('transactions', tId), {
+      batch.set(storeDoc('transactions', tId), {
         id: tId,
         type: 'inventory_buy',
         date: bulkDate || getTodayDateStr(),
@@ -578,7 +635,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // 7. ORDER, KALKULATOR BUNDLING & PENYELESAIAN
+  // 8. ORDER, KALKULATOR BUNDLING & PENYELESAIAN
   // ==========================================================================
   const openOrderSheet = (mode) => {
     const first = fruits[0];
@@ -622,7 +679,7 @@ export default function App() {
       qty: Number((Number(it.qty) * orderCalc.mult).toFixed(2))
     }));
     const id = 'o_' + Date.now();
-    await setDoc(userDoc('orders', id), {
+    await setDoc(storeDoc('orders', id), {
       id,
       customer: orderCustomer.trim(),
       status: orderStatus,
@@ -674,13 +731,13 @@ export default function App() {
     (o.items || []).forEach((it) => {
       const f = fruits.find((item) => item.name.trim().toLowerCase() === it.fruitName.trim().toLowerCase());
       if (f) {
-        batch.update(userDoc('fruits', f.id), {
+        batch.update(storeDoc('fruits', f.id), {
           stock: Math.max(0, Number((Number(f.stock) - Number(it.qty)).toFixed(2)))
         });
       }
     });
 
-    batch.update(userDoc('orders', o.id), {
+    batch.update(storeDoc('orders', o.id), {
       status: 'completed',
       paymentStatus: payStatus,
       completedDate: completeDate,
@@ -688,7 +745,7 @@ export default function App() {
     });
 
     const saleId = 'sale_' + o.id;
-    batch.set(userDoc('transactions', saleId), {
+    batch.set(storeDoc('transactions', saleId), {
       id: saleId,
       orderId: o.id,
       type: 'sale',
@@ -712,24 +769,24 @@ export default function App() {
   const deleteOrder = async (orderId) => {
     if (!user) return;
     const batch = writeBatch(db);
-    batch.delete(userDoc('orders', orderId));
+    batch.delete(storeDoc('orders', orderId));
     const linked = transactions.filter((t) => t.orderId === orderId);
-    linked.forEach((t) => batch.delete(userDoc('transactions', t.id)));
+    linked.forEach((t) => batch.delete(storeDoc('transactions', t.id)));
     await batch.commit();
     showToast('Order & catatan terkait dihapus.');
   };
 
   // ==========================================================================
-  // 8. PIUTANG, REKENING & KEUANGAN
+  // 9. PIUTANG, REKENING & KEUANGAN
   // ==========================================================================
   const markReceivablePaid = async (o) => {
     if (!user) return;
     const todayStr = getTodayDateStr();
     const batch = writeBatch(db);
-    batch.update(userDoc('orders', o.id), { paymentStatus: 'paid', paidDate: todayStr });
+    batch.update(storeDoc('orders', o.id), { paymentStatus: 'paid', paidDate: todayStr });
     const trx = transactions.find((t) => t.orderId === o.id && t.type === 'sale');
     if (trx) {
-      batch.update(userDoc('transactions', trx.id), {
+      batch.update(storeDoc('transactions', trx.id), {
         paymentStatus: 'paid',
         paidDate: todayStr
       });
@@ -742,7 +799,7 @@ export default function App() {
     e.preventDefault();
     if (!user) return;
     const id = 'b_' + Date.now();
-    await setDoc(userDoc('bankAccounts', id), {
+    await setDoc(storeDoc('bankAccounts', id), {
       id,
       bank: bankForm.bank.trim(),
       number: bankForm.number.trim(),
@@ -757,7 +814,7 @@ export default function App() {
     e.preventDefault();
     if (!user) return;
     const id = 't_' + Date.now();
-    await setDoc(userDoc('transactions', id), {
+    await setDoc(storeDoc('transactions', id), {
       id,
       type: financeForm.type,
       date: financeForm.date || getTodayDateStr(),
@@ -770,7 +827,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // 9. DATA KEUANGAN PER PERIODE
+  // 10. DATA KEUANGAN PER PERIODE
   // ==========================================================================
   const salesList = useMemo(
     () => transactions.filter((t) => t.type === 'sale' && isDateInPeriod(t.date, financePeriods.sales)),
@@ -828,7 +885,6 @@ export default function App() {
     };
   }, [transactions, financePeriods.balance, metrics.inventoryValue]);
 
-  // Arus Kas menggunakan paidDate untuk penjualan lunas agar akurat per tanggal uang diterima
   const cashflowData = useMemo(() => {
     let cfIn = 0;
     let cfOut = 0;
@@ -853,6 +909,90 @@ export default function App() {
 
   const activeThemeVars = FRESH_MODES[colorMode] || FRESH_MODES.light;
 
+  // ==========================================================================
+  // 11. HALAMAN GERBANG LOGIN (JIKA BELUM LOGIN DENGAN EMAIL TERDAFTAR)
+  // ==========================================================================
+  if (authChecking) {
+    return (
+      <div style={{ backgroundColor: activeThemeVars['--bg-outer'], minHeight: '100vh' }} className="flex justify-center font-sans">
+        <div style={{ ...activeThemeVars, backgroundColor: 'var(--bg-app)', color: 'var(--text-main)' }} className="w-full max-w-[440px] min-h-screen flex flex-col items-center justify-center p-6 text-center space-y-3">
+          <MFruitsLogo sizeClass="w-16 h-16 rounded-3xl p-2" />
+          <p className="text-xs font-bold opacity-75">Memeriksa akses MFruits...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div style={{ backgroundColor: activeThemeVars['--bg-outer'], minHeight: '100vh' }} className="flex justify-center font-sans">
+        <div
+          style={{ ...activeThemeVars, backgroundColor: 'var(--bg-app)', color: 'var(--text-main)' }}
+          className="w-full max-w-[440px] min-h-screen flex flex-col justify-between p-6 shadow-2xl"
+        >
+          <div className="flex justify-end">
+            <button
+              onClick={handleToggleColorMode}
+              style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }}
+              className="w-10 h-10 rounded-xl border flex items-center justify-center"
+              title="Ganti Mode Terang/Gelap"
+            >
+              {colorMode === 'light' ? '🌙' : '☀️'}
+            </button>
+          </div>
+
+          <div className="space-y-6 text-center my-auto">
+            <div className="flex flex-col items-center space-y-3">
+              <MFruitsLogo sizeClass="w-20 h-20 rounded-3xl p-2.5" />
+              <div>
+                <h1 className="text-2xl font-extrabold tracking-tight">MFruits</h1>
+                <p style={{ color: 'var(--text-muted)' }} className="text-xs font-semibold">
+                  Manis Segar Menyehatkan
+                </p>
+              </div>
+            </div>
+
+            <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-3xl p-5 space-y-4 text-left shadow-sm">
+              <div className="space-y-1">
+                <h2 className="text-sm font-extrabold">Akses Terbatas (Privat)</h2>
+                <p style={{ color: 'var(--text-muted)' }} className="text-xs leading-relaxed">
+                  Sistem pengelolaan stok, order, piutang, dan pembukuan <b>MFruits</b> hanya dapat dibuka oleh akun Google yang terdaftar.
+                </p>
+              </div>
+
+              {authError && (
+                <div className="p-3 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-500 text-xs font-semibold">
+                  {authError}
+                </div>
+              )}
+
+              <button
+                onClick={handleGoogleLogin}
+                style={{ backgroundColor: 'var(--accent)' }}
+                className="w-full py-3.5 rounded-2xl text-white font-extrabold text-xs shadow-md flex items-center justify-center gap-2.5 active:scale-[0.99] transition-transform"
+              >
+                <svg viewBox="0 0 24 24" className="w-4 h-4 bg-white rounded-full p-0.5">
+                  <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z" />
+                  <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24z" />
+                  <path fill="#FBBC05" d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14z" />
+                  <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96z" />
+                </svg>
+                <span>Masuk dengan Akun Google</span>
+              </button>
+            </div>
+          </div>
+
+          <p style={{ color: 'var(--text-muted)' }} className="text-[11px] text-center">
+            MFruits Cloud System • Terlindungi Firebase Auth
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================================================
+  // 12. DASHBOARD UTAMA (JIKA EMAIL TERDAFTAR)
+  // ==========================================================================
   return (
     <div style={{ backgroundColor: activeThemeVars['--bg-outer'], minHeight: '100vh' }} className="flex justify-center font-sans transition-colors duration-200">
       <div
@@ -872,80 +1012,32 @@ export default function App() {
           </div>
         )}
 
-        {/* HEADER MFRUITS + OPSI 1B LOGO + SYNC AKUN + TOGGLE TEMA */}
+        {/* HEADER MFRUITS + OPSI 1B LOGO + PROFIL AKUN + TOGGLE TEMA */}
         <header style={{ background: 'var(--header-grad)' }} className="px-4 py-4 text-white rounded-b-[1.75rem] shadow-md sticky top-0 z-30">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-3">
-              {/* Logo Opsi 1B: Monogram M + Potongan Apel Merah & Daun Mint */}
-              <div className="w-12 h-12 rounded-2xl bg-[#d1fae5] flex items-center justify-center shadow-md shrink-0 overflow-hidden p-1.5 border border-white/40">
-                <svg viewBox="0 0 100 100" className="w-full h-full" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path
-                    d="M16 74V36C16 24 25 18 34 25L50 38L66 25C75 18 84 24 84 36V74"
-                    stroke="#065f46"
-                    strokeWidth="22"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d="M16 74V36C16 24 25 18 34 25L50 38L66 25C75 18 84 24 84 36V74"
-                    stroke="#10b981"
-                    strokeWidth="15"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d="M16 74V52C20 44 27 42 33 46M67 46C73 42 80 44 84 52V74"
-                    stroke="#facc15"
-                    strokeWidth="15"
-                    strokeLinecap="round"
-                  />
-                  <path
-                    d="M50 44C50 33 59 27 68 29C67 38 59 44 50 44Z"
-                    fill="#16a34a"
-                    stroke="#065f46"
-                    strokeWidth="2.5"
-                    strokeLinejoin="round"
-                  />
-                  <path d="M52 42L63 32" stroke="#86efac" strokeWidth="2" strokeLinecap="round" />
-                  <path
-                    d="M50 48C43 44 33 48 33 59C33 71 41 81 50 79C59 81 67 71 67 59C67 48 57 44 50 48Z"
-                    fill="#dc2626"
-                    stroke="#7f1d1d"
-                    strokeWidth="2.5"
-                  />
-                  <path
-                    d="M50 51C45 48 37 51 37 59C37 68 43 76 50 74.5C57 76 63 68 63 59C63 51 55 48 50 51Z"
-                    fill="#fefce8"
-                  />
-                  <ellipse cx="46.5" cy="62" rx="1.6" ry="2.8" transform="rotate(-15 46.5 62)" fill="#78350f" />
-                  <ellipse cx="53.5" cy="62" rx="1.6" ry="2.8" transform="rotate(15 53.5 62)" fill="#78350f" />
-                </svg>
-              </div>
+              <MFruitsLogo />
               <div>
                 <h1 className="font-extrabold text-base leading-tight tracking-tight">MFruits</h1>
                 <p className="text-[11px] text-white/85 font-medium">
-                  {dbError ? 'Error Firebase' : 'Manis Segar Menyehatkan'}
+                  Manis Segar Menyehatkan
                 </p>
               </div>
             </div>
 
-            {/* Tombol Sync Akun Google & Toggle Bulan/Matahari */}
+            {/* Tombol Profil Email & Toggle Bulan/Matahari */}
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setAccountModalOpen(true)}
-                title={user && !user.isAnonymous ? `Tersinkronisasi: ${user.email}` : 'Sinkronkan ke Akun Google'}
-                aria-label="Status Akun Cloud"
+                title={`Login sebagai ${user.email}`}
+                aria-label="Info Akun Terdaftar"
                 className="w-10 h-10 rounded-xl bg-white/20 hover:bg-white/30 active:scale-95 transition-all flex items-center justify-center shadow-inner relative"
               >
                 <svg viewBox="0 0 24 24" className="w-5 h-5 text-white" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                   <circle cx="12" cy="7" r="4" />
                 </svg>
-                <span
-                  className={`absolute top-1.5 right-1.5 w-2 h-2 rounded-full ${
-                    user && !user.isAnonymous ? 'bg-emerald-300' : 'bg-amber-300'
-                  }`}
-                />
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-emerald-300" />
               </button>
 
               <button
@@ -979,7 +1071,7 @@ export default function App() {
         {/* MAIN CONTENT */}
         <main className="flex-1 px-4 pt-4 pb-28 space-y-4">
           {dbError && (
-            <div className="p-3 rounded-2xl bg-rose-500/15 border border-rose-500 text-rose-600 text-xs font-semibold">
+            <div className="p-3 rounded-2xl bg-rose-500/15 border border-rose-500 text-rose-500 text-xs font-semibold">
               {dbError}
             </div>
           )}
@@ -1301,7 +1393,7 @@ export default function App() {
                             <div className="flex items-center gap-2">
                               {isReq && (
                                 <button
-                                  onClick={() => updateDoc(userDoc('orders', o.id), { status: 'confirmed' })}
+                                  onClick={() => updateDoc(storeDoc('orders', o.id), { status: 'confirmed' })}
                                   className="flex-1 py-2.5 rounded-xl bg-amber-500 text-white text-xs font-extrabold"
                                 >
                                   Deal Request
@@ -1370,7 +1462,7 @@ export default function App() {
                           >
                             Salin
                           </button>
-                          <button onClick={() => deleteDoc(userDoc('bankAccounts', b.id))} className="px-2 py-1.5 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
+                          <button onClick={() => deleteDoc(storeDoc('bankAccounts', b.id))} className="px-2 py-1.5 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
                             x
                           </button>
                         </div>
@@ -1590,7 +1682,7 @@ export default function App() {
                             </div>
                             <div className="text-right shrink-0">
                               <strong className="text-sm font-extrabold text-emerald-500 block">{formatRp(t.amount)}</strong>
-                              <button onClick={() => deleteDoc(userDoc('transactions', t.id))} className="text-[10px] text-rose-500 font-bold">
+                              <button onClick={() => deleteDoc(storeDoc('transactions', t.id))} className="text-[10px] text-rose-500 font-bold">
                                 Hapus
                               </button>
                             </div>
@@ -1733,46 +1825,27 @@ export default function App() {
           ))}
         </nav>
 
-        {/* ================= MODAL AKUN CLOUD GOOGLE ================= */}
+        {/* ================= MODAL AKUN TERDAFTAR ================= */}
         {accountModalOpen && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center">
             <div style={{ backgroundColor: 'var(--bg-card)' }} className="w-full max-w-[440px] rounded-t-3xl sm:rounded-3xl p-5 space-y-3.5">
               <div className="flex items-center justify-between">
-                <h3 className="font-extrabold text-base">Sinkronisasi Cloud MFruits</h3>
+                <h3 className="font-extrabold text-base">Akun Terdaftar MFruits</h3>
                 <button onClick={() => setAccountModalOpen(false)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
               </div>
-
-              {user && !user.isAnonymous ? (
-                <div className="space-y-3 text-xs">
-                  <div style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }} className="p-3 rounded-2xl space-y-1">
-                    <span className="font-extrabold block">✅ Tersinkronisasi dengan Akun Google</span>
-                    <p className="font-semibold">{user.email}</p>
-                    <p className="text-[11px] opacity-85">Seluruh stok, order, piutang & laporan keuangan otomatis tersinkronisasi jika Anda login dengan email ini di perangkat lain.</p>
-                  </div>
-                  <button
-                    onClick={handleLogoutGoogle}
-                    className="w-full py-2.5 rounded-xl bg-rose-500/15 text-rose-500 font-extrabold"
-                  >
-                    Keluar dari Akun Google
-                  </button>
+              <div className="space-y-3 text-xs">
+                <div style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }} className="p-3 rounded-2xl space-y-1">
+                  <span className="font-extrabold block">✅ Akses Resmi Terverifikasi</span>
+                  <p className="font-semibold">{user.email}</p>
+                  <p className="text-[11px] opacity-85">Seluruh perubahan data otomatis tersinkronisasi untuk semua email terdaftar di MFruits.</p>
                 </div>
-              ) : (
-                <div className="space-y-3 text-xs">
-                  <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3 rounded-2xl space-y-1">
-                    <span className="font-extrabold text-amber-500 block">⚠️ Mode Perangkat Lokal (Tamu)</span>
-                    <p style={{ color: 'var(--text-muted)' }} className="text-[11px] leading-relaxed">
-                      Saat ini data hanya terikat pada browser HP ini. Hubungkan ke <b>Akun Google</b> agar data tetap aman meski ganti HP atau hapus cache browser.
-                    </p>
-                  </div>
-                  <button
-                    onClick={handleGoogleSync}
-                    style={{ backgroundColor: 'var(--accent)' }}
-                    className="w-full py-3 rounded-xl text-white font-extrabold flex items-center justify-center gap-2 shadow"
-                  >
-                    <span>Hubungkan & Simpan ke Akun Google</span>
-                  </button>
-                </div>
-              )}
+                <button
+                  onClick={handleLogoutGoogle}
+                  className="w-full py-2.5 rounded-xl bg-rose-500/15 text-rose-500 font-extrabold"
+                >
+                  Keluar (Logout)
+                </button>
+              </div>
             </div>
           </div>
         )}
