@@ -884,29 +884,6 @@ export default function App() {
           {/* ================= VIEW 1: BERANDA ================= */}
           {currentView === 'home' && (
             <section className="space-y-4">
-              <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3.5 flex items-center justify-between gap-2">
-                <div>
-                  <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold uppercase block">Input Cepat Pelanggan</span>
-                  <p className="text-xs font-extrabold">Catat Order Satuan / Paket</p>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => openOrderSheet('single')}
-                    style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }}
-                    className="px-3 py-2 rounded-xl text-[11px] font-bold"
-                  >
-                    + Satuan
-                  </button>
-                  <button
-                    onClick={() => openOrderSheet('bundle')}
-                    style={{ backgroundColor: 'var(--accent)' }}
-                    className="px-3 py-2 rounded-xl text-white text-[11px] font-bold"
-                  >
-                    + Bundling
-                  </button>
-                </div>
-              </div>
-
               <div className="grid grid-cols-3 gap-2">
                 <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3">
                   <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block">Persediaan</span>
