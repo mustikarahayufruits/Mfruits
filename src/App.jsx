@@ -813,26 +813,55 @@ export default function App() {
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-3">
               {/* Logo Buah-Buahan */}
-              <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center shadow-inner shrink-0">
-                <svg viewBox="0 0 36 36" className="w-7 h-7" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M18 9C18 6 20.5 4 23 4.5C22.5 7 20.5 9 18 9Z" fill="#A7F3D0" />
-                  <path d="M17.5 10V6.5" stroke="#ECFDF5" strokeWidth="1.8" strokeLinecap="round" />
-                  <circle cx="12.5" cy="18.5" r="6.5" fill="#FBBF24" />
-                  <circle cx="10.5" cy="16.5" r="1.2" fill="#FEF3C7" opacity="0.8" />
-                  <circle cx="24" cy="16" r="2.6" fill="#C084FC" />
-                  <circle cx="27" cy="18.5" r="2.6" fill="#A855F7" />
-                  <circle cx="23.5" cy="20.5" r="2.6" fill="#9333EA" />
-                  <circle cx="26" cy="23" r="2.5" fill="#7E22CE" />
+              {/* Logo Opsi 1B: Monogram M + Potongan Apel Merah & Daun Mint */}
+              <div className="w-12 h-12 rounded-2xl bg-[#d1fae5] flex items-center justify-center shadow-md shrink-0 overflow-hidden p-1.5 border border-white/40">
+                <svg viewBox="0 0 100 100" className="w-full h-full" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  {/* Huruf M Tebal Melengkung (Hijau Emerald & Kuning Emas) */}
                   <path
-                    d="M18 13.5C15.2 12.2 11.5 14 11.5 18.2C11.5 23 14.8 27.5 18 27.5C21.2 27.5 24.5 23 24.5 18.2C24.5 14 20.8 12.2 18 13.5Z"
-                    fill="#FB7185"
+                    d="M16 74V36C16 24 25 18 34 25L50 38L66 25C75 18 84 24 84 36V74"
+                    stroke="#065f46"
+                    strokeWidth="22"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                   />
                   <path
-                    d="M14.5 16.5C14 17.5 13.8 19 14.2 20.5"
-                    stroke="#FFE4E6"
-                    strokeWidth="1.6"
+                    d="M16 74V36C16 24 25 18 34 25L50 38L66 25C75 18 84 24 84 36V74"
+                    stroke="#10b981"
+                    strokeWidth="15"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  {/* Aksen Kuning Mangga/Jeruk pada Lengkungan M */}
+                  <path
+                    d="M16 74V52C20 44 27 42 33 46M67 46C73 42 80 44 84 52V74"
+                    stroke="#facc15"
+                    strokeWidth="15"
                     strokeLinecap="round"
                   />
+                  {/* Daun Mint Segar di Atas Apel */}
+                  <path
+                    d="M50 44C50 33 59 27 68 29C67 38 59 44 50 44Z"
+                    fill="#16a34a"
+                    stroke="#065f46"
+                    strokeWidth="2.5"
+                    strokeLinejoin="round"
+                  />
+                  <path d="M52 42L63 32" stroke="#86efac" strokeWidth="2" strokeLinecap="round" />
+                  {/* Potongan Apel Merah di Tengah Lekukan M */}
+                  <path
+                    d="M50 48C43 44 33 48 33 59C33 71 41 81 50 79C59 81 67 71 67 59C67 48 57 44 50 48Z"
+                    fill="#dc2626"
+                    stroke="#7f1d1d"
+                    strokeWidth="2.5"
+                  />
+                  {/* Daging Apel Putih Krem */}
+                  <path
+                    d="M50 51C45 48 37 51 37 59C37 68 43 76 50 74.5C57 76 63 68 63 59C63 51 55 48 50 51Z"
+                    fill="#fefce8"
+                  />
+                  {/* Biji Apel */}
+                  <ellipse cx="46.5" cy="62" rx="1.6" ry="2.8" transform="rotate(-15 46.5 62)" fill="#78350f" />
+                  <ellipse cx="53.5" cy="62" rx="1.6" ry="2.8" transform="rotate(15 53.5 62)" fill="#78350f" />
                 </svg>
               </div>
               <div>
