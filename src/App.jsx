@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import {
+  getAuth,
+  signInAnonymously,
+  onAuthStateChanged,
+  GoogleAuthProvider,
+  linkWithPopup,
+  signInWithPopup,
+  signOut
+} from 'firebase/auth';
 import {
   getFirestore,
   collection,
@@ -27,6 +35,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const googleProvider = new GoogleAuthProvider();
 const APP_ID = 'buahsegar-mobile-v1';
 
 // ============================================================================
@@ -213,9 +222,11 @@ export default function App() {
   const [financeModalOpen, setFinanceModalOpen] = useState(false);
   const [financeForm, setFinanceForm] = useState({ type: 'opex', date: getTodayDateStr(), desc: '', amount: '' });
 
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
+
   const showToast = (msg) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 2800);
+    setTimeout(() => setToastMsg(''), 3000);
   };
 
   const copyTextSafe = (text, msg) => {
@@ -231,18 +242,62 @@ export default function App() {
   };
 
   // ==========================================================================
-  // 4. FIREBASE AUTH & REALTIME LISTENERS
+  // 4. FIREBASE AUTH (ANONYMOUS + GOOGLE SYNC) & REALTIME LISTENERS
   // ==========================================================================
   useEffect(() => {
-    signInAnonymously(auth).catch((err) => {
-      setDbError(err.message);
-    });
-
     const unsubAuth = onAuthStateChanged(auth, (u) => {
-      if (u) setUser(u);
+      if (u) {
+        setUser(u);
+      } else {
+        signInAnonymously(auth).catch((err) => {
+          setDbError(err.message);
+        });
+      }
     });
     return () => unsubAuth();
   }, []);
+
+  const handleGoogleSync = async () => {
+    if (!auth.currentUser) return;
+    try {
+      if (auth.currentUser.isAnonymous) {
+        // Coba tautkan data lokal tamu ke akun Google agar data tidak hilang
+        const res = await linkWithPopup(auth.currentUser, googleProvider);
+        setUser({ ...res.user });
+        setAccountModalOpen(false);
+        showToast(`Tersinkronisasi dengan ${res.user.email}!`);
+      } else {
+        const res = await signInWithPopup(auth, googleProvider);
+        setUser(res.user);
+        setAccountModalOpen(false);
+        showToast(`Masuk sebagai ${res.user.email}`);
+      }
+    } catch (err) {
+      if (err.code === 'auth/credential-already-in-use') {
+        // Jika akun Google sudah pernah dipakai di HP lain, langsung masuk ke akun tersebut
+        try {
+          const res = await signInWithPopup(auth, googleProvider);
+          setUser(res.user);
+          setAccountModalOpen(false);
+          showToast(`Berhasil memuat data dari ${res.user.email}!`);
+        } catch (e2) {
+          showToast('Gagal login Google: ' + e2.message);
+        }
+      } else {
+        showToast('Gagal sinkronisasi Google: ' + err.message);
+      }
+    }
+  };
+
+  const handleLogoutGoogle = async () => {
+    try {
+      await signOut(auth);
+      setAccountModalOpen(false);
+      showToast('Keluar dari akun Google.');
+    } catch (err) {
+      showToast(err.message);
+    }
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -628,7 +683,8 @@ export default function App() {
     batch.update(userDoc('orders', o.id), {
       status: 'completed',
       paymentStatus: payStatus,
-      completedDate: completeDate
+      completedDate: completeDate,
+      ...(payStatus === 'paid' ? { paidDate: completeDate } : {})
     });
 
     const saleId = 'sale_' + o.id;
@@ -638,6 +694,7 @@ export default function App() {
       type: 'sale',
       paymentStatus: payStatus,
       date: completeDate,
+      ...(payStatus === 'paid' ? { paidDate: completeDate } : {}),
       customer: o.customer,
       notes: o.notes,
       items: o.items || [],
@@ -667,13 +724,14 @@ export default function App() {
   // ==========================================================================
   const markReceivablePaid = async (o) => {
     if (!user) return;
+    const todayStr = getTodayDateStr();
     const batch = writeBatch(db);
-    batch.update(userDoc('orders', o.id), { paymentStatus: 'paid' });
+    batch.update(userDoc('orders', o.id), { paymentStatus: 'paid', paidDate: todayStr });
     const trx = transactions.find((t) => t.orderId === o.id && t.type === 'sale');
     if (trx) {
       batch.update(userDoc('transactions', trx.id), {
         paymentStatus: 'paid',
-        date: getTodayDateStr()
+        paidDate: todayStr
       });
     }
     await batch.commit();
@@ -770,18 +828,24 @@ export default function App() {
     };
   }, [transactions, financePeriods.balance, metrics.inventoryValue]);
 
+  // Arus Kas menggunakan paidDate untuk penjualan lunas agar akurat per tanggal uang diterima
   const cashflowData = useMemo(() => {
-    const list = transactions.filter((t) => isDateInPeriod(t.date, financePeriods.cashflow));
     let cfIn = 0;
     let cfOut = 0;
     const items = [];
-    list.forEach((t) => {
-      if (t.type === 'capital' || (t.type === 'sale' && t.paymentStatus === 'paid')) {
+    transactions.forEach((t) => {
+      if (t.type === 'capital' && isDateInPeriod(t.date, financePeriods.cashflow)) {
         cfIn += Number(t.amount || 0);
-        items.push({ ...t, dir: 'in' });
-      } else if (t.type === 'inventory_buy' || t.type === 'opex') {
+        items.push({ ...t, effectiveDate: t.date, dir: 'in' });
+      } else if (t.type === 'sale' && t.paymentStatus === 'paid') {
+        const cashDate = t.paidDate || t.date;
+        if (isDateInPeriod(cashDate, financePeriods.cashflow)) {
+          cfIn += Number(t.amount || 0);
+          items.push({ ...t, effectiveDate: cashDate, dir: 'in' });
+        }
+      } else if ((t.type === 'inventory_buy' || t.type === 'opex') && isDateInPeriod(t.date, financePeriods.cashflow)) {
         cfOut += Number(t.amount || 0);
-        items.push({ ...t, dir: 'out' });
+        items.push({ ...t, effectiveDate: t.date, dir: 'out' });
       }
     });
     return { cfIn, cfOut, items };
@@ -808,15 +872,13 @@ export default function App() {
           </div>
         )}
 
-        {/* HEADER MFRUITS + SINGLE TOGGLE MODE TERANG / GELAP */}
+        {/* HEADER MFRUITS + OPSI 1B LOGO + SYNC AKUN + TOGGLE TEMA */}
         <header style={{ background: 'var(--header-grad)' }} className="px-4 py-4 text-white rounded-b-[1.75rem] shadow-md sticky top-0 z-30">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-3">
-              {/* Logo Buah-Buahan */}
               {/* Logo Opsi 1B: Monogram M + Potongan Apel Merah & Daun Mint */}
               <div className="w-12 h-12 rounded-2xl bg-[#d1fae5] flex items-center justify-center shadow-md shrink-0 overflow-hidden p-1.5 border border-white/40">
                 <svg viewBox="0 0 100 100" className="w-full h-full" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  {/* Huruf M Tebal Melengkung (Hijau Emerald & Kuning Emas) */}
                   <path
                     d="M16 74V36C16 24 25 18 34 25L50 38L66 25C75 18 84 24 84 36V74"
                     stroke="#065f46"
@@ -831,14 +893,12 @@ export default function App() {
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
-                  {/* Aksen Kuning Mangga/Jeruk pada Lengkungan M */}
                   <path
                     d="M16 74V52C20 44 27 42 33 46M67 46C73 42 80 44 84 52V74"
                     stroke="#facc15"
                     strokeWidth="15"
                     strokeLinecap="round"
                   />
-                  {/* Daun Mint Segar di Atas Apel */}
                   <path
                     d="M50 44C50 33 59 27 68 29C67 38 59 44 50 44Z"
                     fill="#16a34a"
@@ -847,19 +907,16 @@ export default function App() {
                     strokeLinejoin="round"
                   />
                   <path d="M52 42L63 32" stroke="#86efac" strokeWidth="2" strokeLinecap="round" />
-                  {/* Potongan Apel Merah di Tengah Lekukan M */}
                   <path
                     d="M50 48C43 44 33 48 33 59C33 71 41 81 50 79C59 81 67 71 67 59C67 48 57 44 50 48Z"
                     fill="#dc2626"
                     stroke="#7f1d1d"
                     strokeWidth="2.5"
                   />
-                  {/* Daging Apel Putih Krem */}
                   <path
                     d="M50 51C45 48 37 51 37 59C37 68 43 76 50 74.5C57 76 63 68 63 59C63 51 55 48 50 51Z"
                     fill="#fefce8"
                   />
-                  {/* Biji Apel */}
                   <ellipse cx="46.5" cy="62" rx="1.6" ry="2.8" transform="rotate(-15 46.5 62)" fill="#78350f" />
                   <ellipse cx="53.5" cy="62" rx="1.6" ry="2.8" transform="rotate(15 53.5 62)" fill="#78350f" />
                 </svg>
@@ -872,33 +929,50 @@ export default function App() {
               </div>
             </div>
 
-            {/* Tombol Tunggal Switch Bulan & Matahari */}
-            <button
-              onClick={handleToggleColorMode}
-              title={colorMode === 'light' ? 'Ganti ke Mode Gelap' : 'Ganti ke Mode Terang'}
-              aria-label="Ganti Tema Terang/Gelap"
-              className="w-10 h-10 rounded-xl bg-white/20 hover:bg-white/30 active:scale-95 transition-all flex items-center justify-center shadow-inner"
-            >
-              {colorMode === 'light' ? (
-                /* Ikon Bulan (klik untuk Mode Gelap) */
+            {/* Tombol Sync Akun Google & Toggle Bulan/Matahari */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setAccountModalOpen(true)}
+                title={user && !user.isAnonymous ? `Tersinkronisasi: ${user.email}` : 'Sinkronkan ke Akun Google'}
+                aria-label="Status Akun Cloud"
+                className="w-10 h-10 rounded-xl bg-white/20 hover:bg-white/30 active:scale-95 transition-all flex items-center justify-center shadow-inner relative"
+              >
                 <svg viewBox="0 0 24 24" className="w-5 h-5 text-white" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
                 </svg>
-              ) : (
-                /* Ikon Matahari (klik untuk Mode Terang) */
-                <svg viewBox="0 0 24 24" className="w-5 h-5 text-amber-300" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="4" />
-                  <path d="M12 2v2" />
-                  <path d="M12 20v2" />
-                  <path d="m4.93 4.93 1.41 1.41" />
-                  <path d="m17.66 17.66 1.41 1.41" />
-                  <path d="M2 12h2" />
-                  <path d="M20 12h2" />
-                  <path d="m6.34 17.66-1.41 1.41" />
-                  <path d="m19.07 4.93-1.41 1.41" />
-                </svg>
-              )}
-            </button>
+                <span
+                  className={`absolute top-1.5 right-1.5 w-2 h-2 rounded-full ${
+                    user && !user.isAnonymous ? 'bg-emerald-300' : 'bg-amber-300'
+                  }`}
+                />
+              </button>
+
+              <button
+                onClick={handleToggleColorMode}
+                title={colorMode === 'light' ? 'Ganti ke Mode Gelap' : 'Ganti ke Mode Terang'}
+                aria-label="Ganti Tema Terang/Gelap"
+                className="w-10 h-10 rounded-xl bg-white/20 hover:bg-white/30 active:scale-95 transition-all flex items-center justify-center shadow-inner"
+              >
+                {colorMode === 'light' ? (
+                  <svg viewBox="0 0 24 24" className="w-5 h-5 text-white" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" className="w-5 h-5 text-amber-300" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="4" />
+                    <path d="M12 2v2" />
+                    <path d="M12 20v2" />
+                    <path d="m4.93 4.93 1.41 1.41" />
+                    <path d="m17.66 17.66 1.41 1.41" />
+                    <path d="M2 12h2" />
+                    <path d="M20 12h2" />
+                    <path d="m6.34 17.66-1.41 1.41" />
+                    <path d="m19.07 4.93-1.41 1.41" />
+                  </svg>
+                )}
+              </button>
+            </div>
           </div>
         </header>
 
@@ -1510,7 +1584,9 @@ export default function App() {
                                   {t.paymentStatus === 'paid' ? 'LUNAS' : 'PIUTANG'}
                                 </span>
                               </div>
-                              <span style={{ color: 'var(--text-muted)' }} className="text-[11px] block mt-0.5">Tgl: {t.date}</span>
+                              <span style={{ color: 'var(--text-muted)' }} className="text-[11px] block mt-0.5">
+                                Tgl Order: {t.date}{t.paidDate && t.paidDate !== t.date ? ` • Lunas: ${t.paidDate}` : ''}
+                              </span>
                             </div>
                             <div className="text-right shrink-0">
                               <strong className="text-sm font-extrabold text-emerald-500 block">{formatRp(t.amount)}</strong>
@@ -1606,7 +1682,7 @@ export default function App() {
                       <div key={t.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3 flex items-center justify-between gap-2 text-xs">
                         <div>
                           <strong className="block">{t.desc}</strong>
-                          <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">{t.date}</span>
+                          <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">{t.effectiveDate}</span>
                         </div>
                         <strong className={t.dir === 'in' ? 'text-emerald-500' : 'text-rose-500'}>
                           {t.dir === 'in' ? '+' : '-'}{formatRp(t.amount)}
@@ -1656,6 +1732,50 @@ export default function App() {
             </button>
           ))}
         </nav>
+
+        {/* ================= MODAL AKUN CLOUD GOOGLE ================= */}
+        {accountModalOpen && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center">
+            <div style={{ backgroundColor: 'var(--bg-card)' }} className="w-full max-w-[440px] rounded-t-3xl sm:rounded-3xl p-5 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <h3 className="font-extrabold text-base">Sinkronisasi Cloud MFruits</h3>
+                <button onClick={() => setAccountModalOpen(false)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
+              </div>
+
+              {user && !user.isAnonymous ? (
+                <div className="space-y-3 text-xs">
+                  <div style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }} className="p-3 rounded-2xl space-y-1">
+                    <span className="font-extrabold block">✅ Tersinkronisasi dengan Akun Google</span>
+                    <p className="font-semibold">{user.email}</p>
+                    <p className="text-[11px] opacity-85">Seluruh stok, order, piutang & laporan keuangan otomatis tersinkronisasi jika Anda login dengan email ini di perangkat lain.</p>
+                  </div>
+                  <button
+                    onClick={handleLogoutGoogle}
+                    className="w-full py-2.5 rounded-xl bg-rose-500/15 text-rose-500 font-extrabold"
+                  >
+                    Keluar dari Akun Google
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3 text-xs">
+                  <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3 rounded-2xl space-y-1">
+                    <span className="font-extrabold text-amber-500 block">⚠️ Mode Perangkat Lokal (Tamu)</span>
+                    <p style={{ color: 'var(--text-muted)' }} className="text-[11px] leading-relaxed">
+                      Saat ini data hanya terikat pada browser HP ini. Hubungkan ke <b>Akun Google</b> agar data tetap aman meski ganti HP atau hapus cache browser.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleGoogleSync}
+                    style={{ backgroundColor: 'var(--accent)' }}
+                    className="w-full py-3 rounded-xl text-white font-extrabold flex items-center justify-center gap-2 shadow"
+                  >
+                    <span>Hubungkan & Simpan ke Akun Google</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ================= MODAL 1: TAMBAH / EDIT BUAH ================= */}
         {fruitModalOpen && (
@@ -1837,6 +1957,15 @@ export default function App() {
                         className="w-16 px-2 py-1.5 rounded-lg text-center font-bold outline-none"
                       />
                       <span className="text-[11px] w-10 truncate">{it.unit}</span>
+                      {bundleItems.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setBundleItems(bundleItems.filter((_, i) => i !== idx))}
+                          className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 font-bold"
+                        >
+                          x
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
