@@ -32,7 +32,7 @@ const firebaseConfig = {
 
 // MASUKKAN EMAIL GOOGLE YANG DIIZINKAN MENGAKSES MFRUITS (HURUF KECIL SEMUA)
 const ALLOWED_EMAILS = [
-  'emailkamu@gmail.com',
+  'mustikarahayufruits@gmail.com',
   'emailpartner@gmail.com'
 ];
 
