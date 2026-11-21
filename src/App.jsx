@@ -761,8 +761,31 @@ export default function App() {
         <header style={{ background: 'var(--header-grad)' }} className="px-4 pt-4 pb-5 text-white rounded-b-[1.75rem] shadow-md sticky top-0 z-30">
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center font-extrabold text-sm tracking-tight">
-                MF
+              <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center shadow-inner shrink-0">
+                <svg viewBox="0 0 36 36" className="w-7 h-7" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  {/* Daun & Tangkai */}
+                  <path d="M18 9C18 6 20.5 4 23 4.5C22.5 7 20.5 9 18 9Z" fill="#A7F3D0" />
+                  <path d="M17.5 10V6.5" stroke="#ECFDF5" strokeWidth="1.8" strokeLinecap="round" />
+                  {/* Jeruk di belakang kiri */}
+                  <circle cx="12.5" cy="18.5" r="6.5" fill="#FBBF24" />
+                  <circle cx="10.5" cy="16.5" r="1.2" fill="#FEF3C7" opacity="0.8" />
+                  {/* Anggur di belakang kanan */}
+                  <circle cx="24" cy="16" r="2.6" fill="#C084FC" />
+                  <circle cx="27" cy="18.5" r="2.6" fill="#A855F7" />
+                  <circle cx="23.5" cy="20.5" r="2.6" fill="#9333EA" />
+                  <circle cx="26" cy="23" r="2.5" fill="#7E22CE" />
+                  {/* Apel merah utama di depan */}
+                  <path
+                    d="M18 13.5C15.2 12.2 11.5 14 11.5 18.2C11.5 23 14.8 27.5 18 27.5C21.2 27.5 24.5 23 24.5 18.2C24.5 14 20.8 12.2 18 13.5Z"
+                    fill="#FB7185"
+                  />
+                  <path
+                    d="M14.5 16.5C14 17.5 13.8 19 14.2 20.5"
+                    stroke="#FFE4E6"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                  />
+                </svg>
               </div>
               <div>
                 <h1 className="font-extrabold text-base leading-tight tracking-tight">MFruits</h1>
