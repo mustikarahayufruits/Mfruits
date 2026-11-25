@@ -30,10 +30,8 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
-// MASUKKAN EMAIL GOOGLE YANG DIIZINKAN MENGAKSES MFRUITS (HURUF KECIL SEMUA)
 const ALLOWED_EMAILS = [
-  'mustikarahayufruits@gmail.com',
-  'emailpartner@gmail.com'
+  'mustikarahayufruits@gmail.com'
 ];
 
 const app = initializeApp(firebaseConfig);
@@ -259,6 +257,16 @@ export default function App() {
   const [bulkNote, setBulkNote] = useState('');
   const [bulkRows, setBulkRows] = useState([]);
 
+  // Modal Out Stock Non-Penjualan
+  const [outStockModalOpen, setOutStockModalOpen] = useState(false);
+  const [outStockForm, setOutStockForm] = useState({
+    fruitId: '',
+    qty: '',
+    reason: 'Buah Busuk / Rusak',
+    date: getTodayDateStr(),
+    note: ''
+  });
+
   const [orderSheetOpen, setOrderSheetOpen] = useState(false);
   const [orderMode, setOrderMode] = useState('single');
   const [orderCustomer, setOrderCustomer] = useState('');
@@ -268,14 +276,16 @@ export default function App() {
   const [orderNotes, setOrderNotes] = useState('');
   const [bundleItems, setBundleItems] = useState([]);
 
+  // Modal Selesaikan Order + Metode Bayar (Transfer / Cash)
   const [completeOrderTarget, setCompleteOrderTarget] = useState(null);
   const [completeDate, setCompleteDate] = useState(getTodayDateStr());
+  const [completePayMethod, setCompletePayMethod] = useState('transfer');
 
   const [bankModalOpen, setBankModalOpen] = useState(false);
   const [bankForm, setBankForm] = useState({ bank: '', number: '', holder: '' });
 
   const [financeModalOpen, setFinanceModalOpen] = useState(false);
-  const [financeForm, setFinanceForm] = useState({ type: 'opex', date: getTodayDateStr(), desc: '', amount: '' });
+  const [financeForm, setFinanceForm] = useState({ type: 'opex', date: getTodayDateStr(), desc: '', amount: '', payMethod: 'cash' });
 
   const [accountModalOpen, setAccountModalOpen] = useState(false);
 
@@ -310,7 +320,6 @@ export default function App() {
         setUser(u);
         setAuthError('');
       } else if (u) {
-        // Jika login tapi email tidak terdaftar (atau sesi anonymous lama), langsung keluarkan
         const rejectedEmail = u.email || 'Akun Tamu';
         await signOut(auth);
         setUser(null);
@@ -349,7 +358,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // 5. REALTIME LISTENERS FIRESTORE (SHARED STORE DATA UNTUK EMAIL TERDAFTAR)
+  // 5. REALTIME LISTENERS FIRESTORE
   // ==========================================================================
   useEffect(() => {
     if (!user) return;
@@ -431,16 +440,18 @@ export default function App() {
 
     const allSales = transactions.filter((t) => t.type === 'sale');
     const allOpex = transactions.filter((t) => t.type === 'opex');
+    const allStockOut = transactions.filter((t) => t.type === 'stock_out');
     const totalRev = allSales.reduce((s, t) => s + Number(t.amount || 0), 0);
     const totalHpp = allSales.reduce((s, t) => s + Number(t.costAmount || 0), 0);
     const totalOpex = allOpex.reduce((s, t) => s + Number(t.amount || 0), 0);
-    const netProfitAll = totalRev - totalHpp - totalOpex;
+    const totalLoss = allStockOut.reduce((s, t) => s + Number(t.amount || 0), 0);
+    const netProfitAll = totalRev - totalHpp - totalOpex - totalLoss;
 
     return { inventoryValue, lowStockItems, shoppingList, totalShoppingCost, netProfitAll };
   }, [fruits, orders, transactions]);
 
   // ==========================================================================
-  // 7. AKSI STOK & BELANJA
+  // 7. AKSI STOK, BELANJA & OUT STOCK NON-PENJUALAN
   // ==========================================================================
   const adjustStock = async (fruitId, delta, recordPurchase) => {
     const f = fruits.find((item) => item.id === fruitId);
@@ -539,6 +550,59 @@ export default function App() {
     showToast('Item buah dihapus.');
   };
 
+  // Buka Modal Out Stock Non-Penjualan
+  const openOutStockModal = () => {
+    const available = fruits.filter((f) => Number(f.stock) > 0);
+    const first = available[0] || fruits[0];
+    setOutStockForm({
+      fruitId: first ? first.id : '',
+      qty: '',
+      reason: 'Buah Busuk / Rusak',
+      date: getTodayDateStr(),
+      note: ''
+    });
+    setOutStockModalOpen(true);
+  };
+
+  const saveOutStockForm = async (e) => {
+    e.preventDefault();
+    if (!user || !outStockForm.fruitId) return;
+    const fruit = fruits.find((f) => f.id === outStockForm.fruitId);
+    if (!fruit) return;
+
+    const qty = Number(outStockForm.qty) || 0;
+    if (qty <= 0) return showToast('Jumlah pengeluaran stok harus lebih dari 0.');
+    if (qty > Number(fruit.stock)) {
+      return showToast(`Stok ${fruit.name} tidak cukup (tersisa ${fruit.stock} ${fruit.unit}).`);
+    }
+
+    const lossValue = qty * Number(fruit.buyPrice || 0);
+    const batch = writeBatch(db);
+
+    batch.update(storeDoc('fruits', fruit.id), {
+      stock: Math.max(0, Number((Number(fruit.stock) - qty).toFixed(2)))
+    });
+
+    const tId = 'out_' + Date.now();
+    batch.set(storeDoc('transactions', tId), {
+      id: tId,
+      type: 'stock_out',
+      fruitId: fruit.id,
+      fruitName: fruit.name,
+      unit: fruit.unit,
+      qty,
+      reason: outStockForm.reason,
+      date: outStockForm.date || getTodayDateStr(),
+      desc: `Out Stok (${outStockForm.reason}): ${fruit.name} ${qty} ${fruit.unit}${outStockForm.note ? ' — ' + outStockForm.note.trim() : ''}`,
+      amount: lossValue,
+      createdAt: Date.now()
+    });
+
+    await batch.commit();
+    setOutStockModalOpen(false);
+    showToast(`Stok ${fruit.name} dikurangi ${qty} ${fruit.unit} (${outStockForm.reason})`);
+  };
+
   const openBulkRestockModal = () => {
     const first = fruits[0];
     setBulkRows([
@@ -635,7 +699,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // 8. ORDER, KALKULATOR BUNDLING & PENYELESAIAN
+  // 8. ORDER, KALKULATOR BUNDLING & PENYELESAIAN (TRANSFER / CASH)
   // ==========================================================================
   const openOrderSheet = (mode) => {
     const first = fruits[0];
@@ -712,7 +776,7 @@ export default function App() {
       '',
       `*Total Pembayaran: ${formatRp(o.totalSell)}*`,
       '',
-      'Pembayaran bisa ditransfer ke rekening berikut:',
+      'Pembayaran bisa melalui Cash atau transfer ke rekening berikut:',
       banksText,
       '',
       'Terima kasih sudah berbelanja di *MFruits*!'
@@ -720,7 +784,7 @@ export default function App() {
       .filter((line) => line !== '')
       .join('\n');
 
-    copyTextSafe(msg, 'Rincian pesanan & info bank disalin untuk WA!');
+    copyTextSafe(msg, 'Rincian pesanan & info pembayaran disalin untuk WA!');
   };
 
   const confirmCompleteOrder = async (payStatus) => {
@@ -737,11 +801,13 @@ export default function App() {
       }
     });
 
+    const methodObj = payStatus === 'paid' ? { paymentMethod: completePayMethod, paidDate: completeDate } : {};
+
     batch.update(storeDoc('orders', o.id), {
       status: 'completed',
       paymentStatus: payStatus,
       completedDate: completeDate,
-      ...(payStatus === 'paid' ? { paidDate: completeDate } : {})
+      ...methodObj
     });
 
     const saleId = 'sale_' + o.id;
@@ -751,7 +817,7 @@ export default function App() {
       type: 'sale',
       paymentStatus: payStatus,
       date: completeDate,
-      ...(payStatus === 'paid' ? { paidDate: completeDate } : {}),
+      ...methodObj,
       customer: o.customer,
       notes: o.notes,
       items: o.items || [],
@@ -763,7 +829,11 @@ export default function App() {
 
     await batch.commit();
     setCompleteOrderTarget(null);
-    showToast(payStatus === 'paid' ? 'Order lunas & stok terpotong!' : 'Order selesai & masuk ke Tab Piutang!');
+    showToast(
+      payStatus === 'paid'
+        ? `Order lunas (${completePayMethod === 'cash' ? 'Cash' : 'Transfer'}) & stok terpotong!`
+        : 'Order selesai & masuk ke Tab Piutang!'
+    );
   };
 
   const deleteOrder = async (orderId) => {
@@ -777,22 +847,27 @@ export default function App() {
   };
 
   // ==========================================================================
-  // 9. PIUTANG, REKENING & KEUANGAN
+  // 9. PIUTANG (PELUNASAN TRANSFER / CASH), REKENING & KEUANGAN
   // ==========================================================================
-  const markReceivablePaid = async (o) => {
+  const markReceivablePaid = async (o, method) => {
     if (!user) return;
     const todayStr = getTodayDateStr();
     const batch = writeBatch(db);
-    batch.update(storeDoc('orders', o.id), { paymentStatus: 'paid', paidDate: todayStr });
+    batch.update(storeDoc('orders', o.id), {
+      paymentStatus: 'paid',
+      paymentMethod: method,
+      paidDate: todayStr
+    });
     const trx = transactions.find((t) => t.orderId === o.id && t.type === 'sale');
     if (trx) {
       batch.update(storeDoc('transactions', trx.id), {
         paymentStatus: 'paid',
+        paymentMethod: method,
         paidDate: todayStr
       });
     }
     await batch.commit();
-    showToast(`Piutang ${o.customer} ditandai Lunas!`);
+    showToast(`Piutang ${o.customer} Lunas via ${method === 'cash' ? 'Cash' : 'Transfer'}!`);
   };
 
   const saveBankForm = async (e) => {
@@ -817,6 +892,7 @@ export default function App() {
     await setDoc(storeDoc('transactions', id), {
       id,
       type: financeForm.type,
+      paymentMethod: financeForm.payMethod || 'cash',
       date: financeForm.date || getTodayDateStr(),
       desc: financeForm.desc.trim(),
       amount: Number(financeForm.amount) || 0,
@@ -858,24 +934,37 @@ export default function App() {
     const hpp = list.filter((t) => t.type === 'sale').reduce((s, t) => s + Number(t.costAmount || 0), 0);
     const gross = rev - hpp;
     const opex = list.filter((t) => t.type === 'opex').reduce((s, t) => s + Number(t.amount || 0), 0);
-    const net = gross - opex;
+    const stockLoss = list.filter((t) => t.type === 'stock_out').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const net = gross - opex - stockLoss;
     const margin = rev > 0 ? Math.round((net / rev) * 100) : 0;
-    return { rev, hpp, gross, opex, net, margin };
+    return { rev, hpp, gross, opex, stockLoss, net, margin };
   }, [transactions, financePeriods.pnl]);
 
   const balanceData = useMemo(() => {
     const list = transactions.filter((t) => isDateInPeriod(t.date, financePeriods.balance));
     const capIn = list.filter((t) => t.type === 'capital').reduce((s, t) => s + Number(t.amount || 0), 0);
-    const paidCash = list.filter((t) => t.type === 'sale' && t.paymentStatus === 'paid').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const paidSales = list.filter((t) => t.type === 'sale' && t.paymentStatus === 'paid');
+    const paidTotal = paidSales.reduce((s, t) => s + Number(t.amount || 0), 0);
+    const paidCashOnly = paidSales
+      .filter((t) => t.paymentMethod === 'cash')
+      .reduce((s, t) => s + Number(t.amount || 0), 0);
+    const paidTransferOnly = paidSales
+      .filter((t) => t.paymentMethod !== 'cash')
+      .reduce((s, t) => s + Number(t.amount || 0), 0);
+
     const unpaidAr = list.filter((t) => t.type === 'sale' && t.paymentStatus === 'unpaid').reduce((s, t) => s + Number(t.amount || 0), 0);
     const invBought = list.filter((t) => t.type === 'inventory_buy').reduce((s, t) => s + Number(t.amount || 0), 0);
     const opexPaid = list.filter((t) => t.type === 'opex').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const stockLoss = list.filter((t) => t.type === 'stock_out').reduce((s, t) => s + Number(t.amount || 0), 0);
+
     const rev = list.filter((t) => t.type === 'sale').reduce((s, t) => s + Number(t.amount || 0), 0);
     const hpp = list.filter((t) => t.type === 'sale').reduce((s, t) => s + Number(t.costAmount || 0), 0);
-    const net = rev - hpp - opexPaid;
-    const cash = capIn + paidCash - invBought - opexPaid;
+    const net = rev - hpp - opexPaid - stockLoss;
+    const cash = capIn + paidTotal - invBought - opexPaid;
     return {
       cash,
+      paidCashOnly,
+      paidTransferOnly,
       unpaidAr,
       inv: metrics.inventoryValue,
       totalAssets: cash + unpaidAr + metrics.inventoryValue,
@@ -887,16 +976,24 @@ export default function App() {
 
   const cashflowData = useMemo(() => {
     let cfIn = 0;
+    let cfInCash = 0;
+    let cfInTransfer = 0;
     let cfOut = 0;
     const items = [];
     transactions.forEach((t) => {
       if (t.type === 'capital' && isDateInPeriod(t.date, financePeriods.cashflow)) {
-        cfIn += Number(t.amount || 0);
+        const amt = Number(t.amount || 0);
+        cfIn += amt;
+        if (t.paymentMethod === 'cash') cfInCash += amt;
+        else cfInTransfer += amt;
         items.push({ ...t, effectiveDate: t.date, dir: 'in' });
       } else if (t.type === 'sale' && t.paymentStatus === 'paid') {
         const cashDate = t.paidDate || t.date;
         if (isDateInPeriod(cashDate, financePeriods.cashflow)) {
-          cfIn += Number(t.amount || 0);
+          const amt = Number(t.amount || 0);
+          cfIn += amt;
+          if (t.paymentMethod === 'cash') cfInCash += amt;
+          else cfInTransfer += amt;
           items.push({ ...t, effectiveDate: cashDate, dir: 'in' });
         }
       } else if ((t.type === 'inventory_buy' || t.type === 'opex') && isDateInPeriod(t.date, financePeriods.cashflow)) {
@@ -904,8 +1001,13 @@ export default function App() {
         items.push({ ...t, effectiveDate: t.date, dir: 'out' });
       }
     });
-    return { cfIn, cfOut, items };
+    return { cfIn, cfInCash, cfInTransfer, cfOut, items };
   }, [transactions, financePeriods.cashflow]);
+
+  const stockOutHistory = useMemo(
+    () => transactions.filter((t) => t.type === 'stock_out'),
+    [transactions]
+  );
 
   const activeThemeVars = FRESH_MODES[colorMode] || FRESH_MODES.light;
 
@@ -1025,7 +1127,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Tombol Profil Email & Toggle Bulan/Matahari */}
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setAccountModalOpen(true)}
@@ -1195,31 +1296,38 @@ export default function App() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <h2 className="text-base font-extrabold">Stok Buah MFruits</h2>
-                  <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Kelola persediaan & harga beli modal</p>
+                  <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Kelola persediaan, belanja & out stok</p>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <button
+                    onClick={openOutStockModal}
+                    className="px-2.5 py-2 rounded-xl bg-rose-500/15 text-rose-500 text-xs font-extrabold"
+                  >
+                    - Out Stok
+                  </button>
+                  <button
                     onClick={openBulkRestockModal}
                     style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }}
-                    className="px-3 py-2 rounded-xl text-xs font-extrabold"
+                    className="px-2.5 py-2 rounded-xl text-xs font-extrabold"
                   >
-                    + Belanja Stok
+                    + Belanja
                   </button>
                   <button
                     onClick={() => openFruitModal(null)}
                     style={{ backgroundColor: 'var(--accent)' }}
-                    className="px-3 py-2 rounded-xl text-white text-xs font-bold"
+                    className="px-2.5 py-2 rounded-xl text-white text-xs font-bold"
                   >
                     + Buah
                   </button>
                 </div>
               </div>
 
-              <div className="flex items-center gap-1.5 text-xs font-bold">
+              <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-bold">
                 {[
                   { id: 'all', label: 'Semua' },
                   { id: 'low', label: 'Habis / Menipis' },
-                  { id: 'ready', label: 'Stok Aman' }
+                  { id: 'ready', label: 'Stok Aman' },
+                  { id: 'out_history', label: `Riwayat Out (${stockOutHistory.length})` }
                 ].map((f) => (
                   <button
                     key={f.id}
@@ -1229,16 +1337,44 @@ export default function App() {
                         ? { backgroundColor: 'var(--accent)', color: '#fff' }
                         : { backgroundColor: 'var(--bg-card)', color: 'var(--text-muted)', borderColor: 'var(--border-color)' }
                     }
-                    className="px-3 py-1.5 rounded-xl border"
+                    className="px-3 py-1.5 rounded-xl border shrink-0"
                   >
                     {f.label}
                   </button>
                 ))}
               </div>
 
-              {fruits.length === 0 ? (
+              {stockFilter === 'out_history' ? (
+                <div className="space-y-2.5">
+                  {stockOutHistory.length === 0 ? (
+                    <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
+                      Belum ada catatan pengeluaran stok non-penjualan (buah rusak/busuk/tester).
+                    </div>
+                  ) : (
+                    stockOutHistory.map((t) => (
+                      <div key={t.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3.5 flex items-start justify-between gap-2 text-xs">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-500 text-[10px] font-extrabold">
+                              {t.reason || 'Out Stok'}
+                            </span>
+                            <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">{t.date}</span>
+                          </div>
+                          <strong className="block mt-1">{t.desc}</strong>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <strong className="text-rose-500 block">-{formatRp(t.amount)}</strong>
+                          <button onClick={() => deleteDoc(storeDoc('transactions', t.id))} className="text-[10px] text-rose-500 font-bold mt-1">
+                            Hapus
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ) : fruits.length === 0 ? (
                 <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
-                  Belum ada data stok buah. Tekan <b>+ Belanja Stok</b> atau <b>+ Buah</b> untuk mulai mengisi.
+                  Belum ada data stok buah. Tekan <b>+ Belanja</b> atau <b>+ Buah</b> untuk mulai mengisi.
                 </div>
               ) : (
                 <div className="space-y-2.5">
@@ -1349,7 +1485,9 @@ export default function App() {
                               </span>
                               {isDone && (
                                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold text-white ${o.paymentStatus === 'paid' ? 'bg-emerald-600' : 'bg-amber-500'}`}>
-                                  {o.paymentStatus === 'paid' ? 'LUNAS' : 'PIUTANG'}
+                                  {o.paymentStatus === 'paid'
+                                    ? `LUNAS (${o.paymentMethod === 'cash' ? 'CASH' : 'TRANSFER'})`
+                                    : 'PIUTANG'}
                                 </span>
                               )}
                             </div>
@@ -1403,6 +1541,7 @@ export default function App() {
                                 onClick={() => {
                                   setCompleteOrderTarget(o);
                                   setCompleteDate(getTodayDateStr());
+                                  setCompletePayMethod('transfer');
                                 }}
                                 style={{ backgroundColor: 'var(--accent)' }}
                                 className="flex-1 py-2.5 rounded-xl text-white text-xs font-extrabold"
@@ -1500,19 +1639,25 @@ export default function App() {
                               </div>
                               <strong className="text-sm font-extrabold text-amber-500">{formatRp(o.totalSell)}</strong>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="grid grid-cols-3 gap-1.5">
                               <button
                                 onClick={() => copyOrderPaymentWA(o)}
                                 style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }}
-                                className="flex-1 py-2 rounded-xl font-bold"
+                                className="py-2 rounded-xl font-bold"
                               >
-                                Tagih via WA
+                                Tagih WA
                               </button>
                               <button
-                                onClick={() => markReceivablePaid(o)}
-                                className="flex-1 py-2 rounded-xl bg-emerald-600 text-white font-bold"
+                                onClick={() => markReceivablePaid(o, 'transfer')}
+                                className="py-2 rounded-xl bg-sky-600 text-white font-bold"
                               >
-                                Tandai Lunas
+                                Lunas Transfer
+                              </button>
+                              <button
+                                onClick={() => markReceivablePaid(o, 'cash')}
+                                className="py-2 rounded-xl bg-emerald-600 text-white font-bold"
+                              >
+                                Lunas Cash
                               </button>
                             </div>
                           </div>
@@ -1535,7 +1680,7 @@ export default function App() {
                 </div>
                 <button
                   onClick={() => {
-                    setFinanceForm({ type: 'opex', date: getTodayDateStr(), desc: '', amount: '' });
+                    setFinanceForm({ type: 'opex', date: getTodayDateStr(), desc: '', amount: '', payMethod: 'cash' });
                     setFinanceModalOpen(true);
                   }}
                   style={{ backgroundColor: 'var(--accent)' }}
@@ -1673,7 +1818,9 @@ export default function App() {
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <strong className="text-sm font-extrabold">{t.customer || t.desc}</strong>
                                 <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold ${t.paymentStatus === 'paid' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>
-                                  {t.paymentStatus === 'paid' ? 'LUNAS' : 'PIUTANG'}
+                                  {t.paymentStatus === 'paid'
+                                    ? `LUNAS • ${t.paymentMethod === 'cash' ? 'CASH' : 'TRANSFER'}`
+                                    : 'PIUTANG'}
                                 </span>
                               </div>
                               <span style={{ color: 'var(--text-muted)' }} className="text-[11px] block mt-0.5">
@@ -1725,6 +1872,7 @@ export default function App() {
                     <div className="flex justify-between"><span style={{ color: 'var(--text-muted)' }}>Harga Pokok Penjualan (HPP)</span><strong className="text-rose-500">-{formatRp(pnlData.hpp)}</strong></div>
                     <div style={{ borderColor: 'var(--border-color)' }} className="flex justify-between pt-1.5 border-t"><span className="font-bold">Laba Kotor</span><strong>{formatRp(pnlData.gross)}</strong></div>
                     <div className="flex justify-between"><span style={{ color: 'var(--text-muted)' }}>Biaya Operasional</span><strong className="text-rose-500">-{formatRp(pnlData.opex)}</strong></div>
+                    <div className="flex justify-between"><span style={{ color: 'var(--text-muted)' }}>Kerugian Out Stok (Busuk/Rusak/Tester)</span><strong className="text-rose-500">-{formatRp(pnlData.stockLoss)}</strong></div>
                   </div>
                 </div>
               )}
@@ -1739,6 +1887,8 @@ export default function App() {
                   <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3 rounded-xl space-y-1.5">
                     <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-extrabold uppercase block">AKTIVA (HARTA USAHA)</span>
                     <div className="flex justify-between"><span>Kas & Saldo Rekening</span><strong>{formatRp(balanceData.cash)}</strong></div>
+                    <div className="flex justify-between text-[11px] pl-2"><span style={{ color: 'var(--text-muted)' }}>• Penerimaan Penjualan Transfer</span><span className="text-sky-500 font-bold">{formatRp(balanceData.paidTransferOnly)}</span></div>
+                    <div className="flex justify-between text-[11px] pl-2"><span style={{ color: 'var(--text-muted)' }}>• Penerimaan Penjualan Cash</span><span className="text-emerald-500 font-bold">{formatRp(balanceData.paidCashOnly)}</span></div>
                     <div className="flex justify-between"><span>Piutang Usaha</span><strong>{formatRp(balanceData.unpaidAr)}</strong></div>
                     <div className="flex justify-between"><span>Persediaan Stok Buah</span><strong>{formatRp(balanceData.inv)}</strong></div>
                     <div style={{ borderColor: 'var(--border-color)' }} className="flex justify-between pt-1.5 border-t font-extrabold">
@@ -1760,20 +1910,32 @@ export default function App() {
               {financeSubTab === 'cashflow' && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-2.5">
-                    <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3">
+                    <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3 space-y-1">
                       <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block">Kas Masuk</span>
-                      <strong className="text-sm font-extrabold text-emerald-500">{formatRp(cashflowData.cfIn)}</strong>
+                      <strong className="text-sm font-extrabold text-emerald-500 block">{formatRp(cashflowData.cfIn)}</strong>
+                      <div className="text-[10px] flex justify-between pt-1 opacity-85">
+                        <span>Transfer: <b>{formatRp(cashflowData.cfInTransfer)}</b></span>
+                        <span>Cash: <b>{formatRp(cashflowData.cfInCash)}</b></span>
+                      </div>
                     </div>
-                    <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3">
+                    <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3 space-y-1">
                       <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block">Kas Keluar</span>
-                      <strong className="text-sm font-extrabold text-rose-500">{formatRp(cashflowData.cfOut)}</strong>
+                      <strong className="text-sm font-extrabold text-rose-500 block">{formatRp(cashflowData.cfOut)}</strong>
+                      <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block pt-1">Belanja Stok & Operasional</span>
                     </div>
                   </div>
                   <div className="space-y-2">
                     {cashflowData.items.map((t) => (
                       <div key={t.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3 flex items-center justify-between gap-2 text-xs">
                         <div>
-                          <strong className="block">{t.desc}</strong>
+                          <div className="flex items-center gap-1.5">
+                            <strong>{t.desc}</strong>
+                            {t.dir === 'in' && (
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold ${t.paymentMethod === 'cash' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-sky-500/15 text-sky-500'}`}>
+                                {t.paymentMethod === 'cash' ? 'CASH' : 'TRANSFER'}
+                              </span>
+                            )}
+                          </div>
                           <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">{t.effectiveDate}</span>
                         </div>
                         <strong className={t.dir === 'in' ? 'text-emerald-500' : 'text-rose-500'}>
@@ -1955,6 +2117,110 @@ export default function App() {
           </div>
         )}
 
+        {/* ================= MODAL BARU: OUT STOCK NON-PENJUALAN ================= */}
+        {outStockModalOpen && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center">
+            <div style={{ backgroundColor: 'var(--bg-card)' }} className="w-full max-w-[440px] rounded-t-3xl sm:rounded-3xl p-5 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-extrabold text-base">Out Stok (Non-Penjualan)</h3>
+                  <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Pengeluaran stok buah busuk, rusak, tester, atau susut</p>
+                </div>
+                <button onClick={() => setOutStockModalOpen(false)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
+              </div>
+
+              <form onSubmit={saveOutStockForm} className="space-y-3 text-xs">
+                <div>
+                  <label style={{ color: 'var(--text-muted)' }} className="font-bold block mb-1">Pilih Buah</label>
+                  <select
+                    required
+                    value={outStockForm.fruitId}
+                    onChange={(e) => setOutStockForm({ ...outStockForm, fruitId: e.target.value })}
+                    style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                    className="w-full px-3 py-2.5 rounded-xl font-bold outline-none"
+                  >
+                    <option value="">-- Pilih Buah --</option>
+                    {fruits.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name} (Stok: {f.stock} {f.unit} • Modal {formatRp(f.buyPrice)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label style={{ color: 'var(--text-muted)' }} className="font-bold block mb-1">Jumlah Keluar</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      required
+                      placeholder="Misal: 0.5"
+                      value={outStockForm.qty}
+                      onChange={(e) => setOutStockForm({ ...outStockForm, qty: e.target.value })}
+                      style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                      className="w-full px-3 py-2.5 rounded-xl font-bold outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ color: 'var(--text-muted)' }} className="font-bold block mb-1">Tanggal</label>
+                    <input
+                      type="date"
+                      required
+                      value={outStockForm.date}
+                      onChange={(e) => setOutStockForm({ ...outStockForm, date: e.target.value })}
+                      style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                      className="w-full px-3 py-2.5 rounded-xl font-semibold outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ color: 'var(--text-muted)' }} className="font-bold block mb-1">Alasan Pengeluaran</label>
+                  <select
+                    value={outStockForm.reason}
+                    onChange={(e) => setOutStockForm({ ...outStockForm, reason: e.target.value })}
+                    style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                    className="w-full px-3 py-2.5 rounded-xl font-semibold outline-none"
+                  >
+                    <option value="Buah Busuk / Rusak">Buah Busuk / Rusak (Tidak Layak Jual)</option>
+                    <option value="Tester / Sample Pelanggan">Tester / Sample Pelanggan</option>
+                    <option value="Susut Timbangan / Sortir">Susut Timbangan / Sortir</option>
+                    <option value="Konsumsi Pribadi / Hadiah">Konsumsi Pribadi / Hadiah</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ color: 'var(--text-muted)' }} className="font-bold block mb-1">Keterangan Tambahan (Opsional)</label>
+                  <input
+                    placeholder="Contoh: Penyok pengiriman / buah terlalu matang"
+                    value={outStockForm.note}
+                    onChange={(e) => setOutStockForm({ ...outStockForm, note: e.target.value })}
+                    style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                    className="w-full px-3 py-2.5 rounded-xl outline-none"
+                  />
+                </div>
+
+                {(() => {
+                  const sel = fruits.find((f) => f.id === outStockForm.fruitId);
+                  const loss = sel ? (Number(outStockForm.qty) || 0) * Number(sel.buyPrice || 0) : 0;
+                  return (
+                    <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3 rounded-xl flex items-center justify-between">
+                      <span style={{ color: 'var(--text-muted)' }}>Nilai Modal Dikeluarkan (Beban Kerugian):</span>
+                      <strong className="text-rose-500">{formatRp(loss)}</strong>
+                    </div>
+                  );
+                })()}
+
+                <button type="submit" className="w-full py-3 rounded-xl bg-rose-600 text-white font-extrabold shadow">
+                  Keluarkan Stok Sekarang
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* ================= MODAL 3: ORDER / KALKULATOR BUNDLING ================= */}
         {orderSheetOpen && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center">
@@ -2064,7 +2330,7 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= MODAL 4: SELESAIKAN ORDER ================= */}
+        {/* ================= MODAL 4: SELESAIKAN ORDER (PILIH TRANSFER / CASH) ================= */}
         {completeOrderTarget && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center">
             <div style={{ backgroundColor: 'var(--bg-card)' }} className="w-full max-w-[440px] rounded-t-3xl sm:rounded-3xl p-5 space-y-3.5">
@@ -2072,14 +2338,40 @@ export default function App() {
                 <h3 className="font-extrabold text-base">Selesaikan Order</h3>
                 <button onClick={() => setCompleteOrderTarget(null)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
               </div>
-              <p className="text-xs">{completeOrderTarget.customer} • Total Tagihan {formatRp(completeOrderTarget.totalSell)}</p>
+              <p className="text-xs">{completeOrderTarget.customer} • Total Tagihan <b>{formatRp(completeOrderTarget.totalSell)}</b></p>
+
               <div className="text-xs space-y-1">
                 <label className="font-bold block">Tanggal Selesai / Pembayaran</label>
                 <input type="date" value={completeDate} onChange={(e) => setCompleteDate(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl font-semibold outline-none" />
               </div>
+
+              <div className="text-xs space-y-1.5">
+                <label className="font-bold block">Metode Pembayaran (Jika Lunas)</label>
+                <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="grid grid-cols-2 gap-1.5 p-1 rounded-xl font-extrabold">
+                  <button
+                    type="button"
+                    onClick={() => setCompletePayMethod('transfer')}
+                    className={`py-2 rounded-lg transition-all ${
+                      completePayMethod === 'transfer' ? 'bg-sky-600 text-white shadow-xs' : 'opacity-70'
+                    }`}
+                  >
+                    🏦 Transfer Bank / QRIS
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCompletePayMethod('cash')}
+                    className={`py-2 rounded-lg transition-all ${
+                      completePayMethod === 'cash' ? 'bg-emerald-600 text-white shadow-xs' : 'opacity-70'
+                    }`}
+                  >
+                    💵 Tunai (Cash)
+                  </button>
+                </div>
+              </div>
+
               <div className="space-y-2 pt-1">
                 <button onClick={() => confirmCompleteOrder('paid')} className="w-full py-3 rounded-xl bg-emerald-600 text-white font-extrabold text-xs">
-                  Lunas (Sudah Bayar Tunai / Transfer)
+                  Lunas ({completePayMethod === 'cash' ? 'Cash' : 'Transfer'}) & Potong Stok
                 </button>
                 <button onClick={() => confirmCompleteOrder('unpaid')} className="w-full py-3 rounded-xl bg-amber-500 text-white font-extrabold text-xs">
                   Belum Bayar (Masukkan ke Tab Piutang)
@@ -2123,7 +2415,13 @@ export default function App() {
                   <option value="capital">Setoran Modal Tambahan</option>
                   <option value="inventory_buy">Belanja Stok Buah (Masuk Persediaan)</option>
                 </select>
-                <input type="date" required value={financeForm.date} onChange={(e) => setFinanceForm({ ...financeForm, date: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="date" required value={financeForm.date} onChange={(e) => setFinanceForm({ ...financeForm, date: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
+                  <select value={financeForm.payMethod} onChange={(e) => setFinanceForm({ ...financeForm, payMethod: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl font-bold outline-none">
+                    <option value="transfer">Transfer</option>
+                    <option value="cash">Cash (Tunai)</option>
+                  </select>
+                </div>
                 <input required placeholder="Keterangan" value={financeForm.desc} onChange={(e) => setFinanceForm({ ...financeForm, desc: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
                 <input type="number" required placeholder="Nominal (Rp)" value={financeForm.amount} onChange={(e) => setFinanceForm({ ...financeForm, amount: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
                 <button type="submit" style={{ backgroundColor: 'var(--accent)' }} className="w-full py-3 rounded-xl text-white font-extrabold">
