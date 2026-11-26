@@ -39,6 +39,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
 const APP_ID = 'buahsegar-mobile-v1';
+const UNIT_OPTIONS = ['kg', 'pack', '500gr', 'pcs', 'box', 'ikat'];
 
 // ============================================================================
 // 2. HELPER TANGGAL, FORMAT RUPIAH & FILTER PERIODE
@@ -411,7 +412,7 @@ export default function App() {
       .filter((o) => o.status !== 'completed')
       .forEach((o) => {
         (o.items || []).forEach((it) => {
-          const key = (it.fruitName || '').trim().toLowerCase();
+          const key = `${(it.fruitName || '').trim().toLowerCase()}|${(it.unit || '').trim().toLowerCase()}`;
           if (!demandMap[key]) demandMap[key] = { fruitName: it.fruitName, unit: it.unit, needed: 0 };
           demandMap[key].needed += Number(it.qty || 0);
         });
@@ -419,7 +420,11 @@ export default function App() {
 
     const shoppingList = Object.values(demandMap)
       .map((d) => {
-        const fruit = fruits.find((f) => f.name.trim().toLowerCase() === d.fruitName.trim().toLowerCase());
+        const fruit = fruits.find(
+          (f) =>
+            f.name.trim().toLowerCase() === d.fruitName.trim().toLowerCase() &&
+            (f.unit || '').trim().toLowerCase() === (d.unit || '').trim().toLowerCase()
+        ) || fruits.find((f) => f.name.trim().toLowerCase() === d.fruitName.trim().toLowerCase());
         const stock = fruit ? Number(fruit.stock) : 0;
         const buyPrice = fruit ? Number(fruit.buyPrice) : 0;
         const deficit = Math.max(0, Number((d.needed - stock).toFixed(2)));
@@ -534,7 +539,7 @@ export default function App() {
     await setDoc(storeDoc('fruits', id), {
       id,
       name: fruitForm.name.trim(),
-      unit: fruitForm.unit.trim(),
+      unit: (fruitForm.unit || 'kg').trim(),
       stock: Number(fruitForm.stock) || 0,
       buyPrice: Number(fruitForm.buyPrice) || 0,
       sellPrice: Number(fruitForm.sellPrice) || 0,
@@ -639,7 +644,11 @@ export default function App() {
         const cleanUnit = (r.unit || 'kg').trim();
         if (!cleanName) return;
 
-        const existing = fruits.find((f) => f.name.trim().toLowerCase() === cleanName.toLowerCase());
+        const existing = fruits.find(
+          (f) =>
+            f.name.trim().toLowerCase() === cleanName.toLowerCase() &&
+            (f.unit || '').trim().toLowerCase() === cleanUnit.toLowerCase()
+        );
         const sellPrice =
           r.sellPrice !== '' && Number(r.sellPrice) > 0 ? Number(r.sellPrice) : Math.round(buyPrice * 1.25);
 
@@ -710,7 +719,7 @@ export default function App() {
             {
               fruitId: first.id,
               fruitName: first.name,
-              qty: mode === 'single' ? 1 : 0.5,
+              qty: mode === 'single' ? 1 : first.unit === 'kg' ? 0.5 : 1,
               unit: first.unit,
               buyPrice: first.buyPrice,
               sellPrice: first.sellPrice
@@ -748,7 +757,7 @@ export default function App() {
       customer: orderCustomer.trim(),
       status: orderStatus,
       paymentStatus: 'unpaid',
-      notes: orderNotes.trim() || items.map((i) => `${i.fruitName} ${i.qty}${i.unit}`).join(', '),
+      notes: orderNotes.trim() || items.map((i) => `${i.fruitName} ${i.qty} ${i.unit}`).join(', '),
       items,
       totalCost: orderCalc.totalCost,
       totalSell: orderCalc.finalSell,
@@ -793,7 +802,8 @@ export default function App() {
     const batch = writeBatch(db);
 
     (o.items || []).forEach((it) => {
-      const f = fruits.find((item) => item.name.trim().toLowerCase() === it.fruitName.trim().toLowerCase());
+      const f = fruits.find((item) => item.id === it.fruitId) ||
+        fruits.find((item) => item.name.trim().toLowerCase() === it.fruitName.trim().toLowerCase());
       if (f) {
         batch.update(storeDoc('fruits', f.id), {
           stock: Math.max(0, Number((Number(f.stock) - Number(it.qty)).toFixed(2)))
@@ -1393,8 +1403,11 @@ export default function App() {
                         <div key={f.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3.5 space-y-2.5">
                           <div className="flex items-start justify-between gap-2">
                             <div>
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
                                 <strong className="text-sm font-extrabold">{f.name}</strong>
+                                <span style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }} className="px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">
+                                  {f.unit}
+                                </span>
                                 {empty ? (
                                   <span className="px-1.5 py-0.5 rounded bg-rose-500 text-white text-[9px] font-bold">HABIS</span>
                                 ) : low ? (
@@ -1419,10 +1432,18 @@ export default function App() {
                               Stok: {f.stock} {f.unit}
                             </span>
                             <div className="flex items-center gap-1.5">
-                              <button onClick={() => adjustStock(f.id, -0.5, false)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-8 h-8 rounded-xl font-extrabold text-sm">
-                                -0.5
+                              <button
+                                onClick={() => adjustStock(f.id, f.unit === 'kg' ? -0.5 : -1, false)}
+                                style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                                className="px-2.5 h-8 rounded-xl font-extrabold text-xs"
+                              >
+                                {f.unit === 'kg' ? '-0.5' : '-1'}
                               </button>
-                              <button onClick={() => adjustStock(f.id, 1, true)} style={{ backgroundColor: 'var(--accent)' }} className="px-3 h-8 rounded-xl text-white text-xs font-bold">
+                              <button
+                                onClick={() => adjustStock(f.id, 1, true)}
+                                style={{ backgroundColor: 'var(--accent)' }}
+                                className="px-3 h-8 rounded-xl text-white text-xs font-bold"
+                              >
                                 +1 Beli
                               </button>
                             </div>
@@ -2021,15 +2042,68 @@ export default function App() {
                 <button onClick={() => setFruitModalOpen(false)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
               </div>
               <form onSubmit={saveFruitForm} className="space-y-3 text-xs">
-                <input required placeholder="Nama Buah" value={fruitForm.name} onChange={(e) => setFruitForm({ ...fruitForm, name: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
-                <div className="grid grid-cols-2 gap-2">
-                  <input required placeholder="Satuan (kg / 500gr)" value={fruitForm.unit} onChange={(e) => setFruitForm({ ...fruitForm, unit: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
-                  <input required type="number" step="0.1" placeholder="Stok" value={fruitForm.stock} onChange={(e) => setFruitForm({ ...fruitForm, stock: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
+                <div>
+                  <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Nama Buah</label>
+                  <input required placeholder="Contoh: Anggur Muscat / Apel Fuji" value={fruitForm.name} onChange={(e) => setFruitForm({ ...fruitForm, name: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none font-semibold" />
                 </div>
+
                 <div className="grid grid-cols-2 gap-2">
-                  <input required type="number" placeholder="Harga Modal (Rp)" value={fruitForm.buyPrice} onChange={(e) => setFruitForm({ ...fruitForm, buyPrice: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
-                  <input required type="number" placeholder="Harga Jual (Rp)" value={fruitForm.sellPrice} onChange={(e) => setFruitForm({ ...fruitForm, sellPrice: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
+                  <div>
+                    <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Satuan Kemasan</label>
+                    <select
+                      value={UNIT_OPTIONS.includes(fruitForm.unit) ? fruitForm.unit : 'custom'}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setFruitForm({ ...fruitForm, unit: val === 'custom' ? '' : val });
+                      }}
+                      style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                      className="w-full px-3 py-2.5 rounded-xl font-bold outline-none"
+                    >
+                      <option value="kg">kg (Kilogram)</option>
+                      <option value="pack">pack (Kemasan Pack)</option>
+                      <option value="500gr">500gr</option>
+                      <option value="pcs">pcs / buah</option>
+                      <option value="box">box / dus</option>
+                      <option value="ikat">ikat</option>
+                      <option value="custom">Lainnya (Ketik manual)...</option>
+                    </select>
+                    {!UNIT_OPTIONS.includes(fruitForm.unit) && (
+                      <input
+                        required
+                        placeholder="Ketik satuan (misal: 250gr)"
+                        value={fruitForm.unit}
+                        onChange={(e) => setFruitForm({ ...fruitForm, unit: e.target.value })}
+                        style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                        className="w-full px-3 py-2 rounded-xl mt-1.5 outline-none"
+                      />
+                    )}
+                  </div>
+                  <div>
+                    <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Stok Saat Ini</label>
+                    <input
+                      required
+                      type="number"
+                      step="0.1"
+                      placeholder="Stok"
+                      value={fruitForm.stock}
+                      onChange={(e) => setFruitForm({ ...fruitForm, stock: e.target.value })}
+                      style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                      className="w-full px-3 py-2.5 rounded-xl font-bold outline-none"
+                    />
+                  </div>
                 </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Harga Modal per {fruitForm.unit || 'Satuan'}</label>
+                    <input required type="number" placeholder="Harga Modal (Rp)" value={fruitForm.buyPrice} onChange={(e) => setFruitForm({ ...fruitForm, buyPrice: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none font-semibold" />
+                  </div>
+                  <div>
+                    <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Harga Jual per {fruitForm.unit || 'Satuan'}</label>
+                    <input required type="number" placeholder="Harga Jual (Rp)" value={fruitForm.sellPrice} onChange={(e) => setFruitForm({ ...fruitForm, sellPrice: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none font-semibold" />
+                  </div>
+                </div>
+
                 <button type="submit" style={{ backgroundColor: 'var(--accent)' }} className="w-full py-3 rounded-xl text-white font-extrabold">
                   Simpan Data Buah
                 </button>
@@ -2084,7 +2158,7 @@ export default function App() {
                       >
                         <option value="NEW">+ Ketik Buah Jenis Baru...</option>
                         {fruits.map((f) => (
-                          <option key={f.id} value={f.id}>{f.name} (Stok: {f.stock})</option>
+                          <option key={f.id} value={f.id}>{f.name} ({f.unit} • Stok: {f.stock})</option>
                         ))}
                       </select>
                       {bulkRows.length > 1 && (
@@ -2096,13 +2170,40 @@ export default function App() {
 
                     {r.fruitId === 'NEW' && (
                       <div className="grid grid-cols-3 gap-1.5">
-                        <input required placeholder="Nama buah baru" value={r.customName} onChange={(e) => { const c = [...bulkRows]; c[idx].customName = e.target.value; setBulkRows(c); }} style={{ backgroundColor: 'var(--bg-card)' }} className="col-span-2 px-2.5 py-2 rounded-xl outline-none" />
-                        <input required placeholder="Satuan" value={r.unit} onChange={(e) => { const c = [...bulkRows]; c[idx].unit = e.target.value; setBulkRows(c); }} style={{ backgroundColor: 'var(--bg-card)' }} className="px-2.5 py-2 rounded-xl outline-none" />
+                        <input
+                          required
+                          placeholder="Nama buah baru"
+                          value={r.customName}
+                          onChange={(e) => {
+                            const c = [...bulkRows];
+                            c[idx].customName = e.target.value;
+                            setBulkRows(c);
+                          }}
+                          style={{ backgroundColor: 'var(--bg-card)' }}
+                          className="col-span-2 px-2.5 py-2 rounded-xl outline-none"
+                        />
+                        <select
+                          value={r.unit || 'kg'}
+                          onChange={(e) => {
+                            const c = [...bulkRows];
+                            c[idx].unit = e.target.value;
+                            setBulkRows(c);
+                          }}
+                          style={{ backgroundColor: 'var(--bg-card)' }}
+                          className="px-2 py-2 rounded-xl font-bold outline-none"
+                        >
+                          <option value="kg">kg</option>
+                          <option value="pack">pack</option>
+                          <option value="500gr">500gr</option>
+                          <option value="pcs">pcs</option>
+                          <option value="box">box</option>
+                          <option value="ikat">ikat</option>
+                        </select>
                       </div>
                     )}
 
                     <div className="grid grid-cols-3 gap-1.5">
-                      <input type="number" step="0.1" required placeholder="Qty" value={r.qty} onChange={(e) => { const c = [...bulkRows]; c[idx].qty = e.target.value; setBulkRows(c); }} style={{ backgroundColor: 'var(--bg-card)' }} className="px-2.5 py-1.5 rounded-xl font-bold outline-none" />
+                      <input type="number" step="0.1" required placeholder={`Qty (${r.unit || 'kg'})`} value={r.qty} onChange={(e) => { const c = [...bulkRows]; c[idx].qty = e.target.value; setBulkRows(c); }} style={{ backgroundColor: 'var(--bg-card)' }} className="px-2.5 py-1.5 rounded-xl font-bold outline-none" />
                       <input type="number" required placeholder="Harga Beli" value={r.buyPrice} onChange={(e) => { const c = [...bulkRows]; c[idx].buyPrice = e.target.value; setBulkRows(c); }} style={{ backgroundColor: 'var(--bg-card)' }} className="px-2.5 py-1.5 rounded-xl font-bold outline-none" />
                       <input type="number" placeholder="Harga Jual" value={r.sellPrice} onChange={(e) => { const c = [...bulkRows]; c[idx].sellPrice = e.target.value; setBulkRows(c); }} style={{ backgroundColor: 'var(--bg-card)' }} className="px-2.5 py-1.5 rounded-xl font-bold outline-none" />
                     </div>
@@ -2156,7 +2257,7 @@ export default function App() {
                       step="0.1"
                       min="0.1"
                       required
-                      placeholder="Misal: 0.5"
+                      placeholder="Misal: 1"
                       value={outStockForm.qty}
                       onChange={(e) => setOutStockForm({ ...outStockForm, qty: e.target.value })}
                       style={{ backgroundColor: 'var(--bg-card-sub)' }}
@@ -2256,7 +2357,19 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           const f = fruits[0];
-                          if (f) setBundleItems([...bundleItems, { fruitId: f.id, fruitName: f.name, qty: 0.5, unit: f.unit, buyPrice: f.buyPrice, sellPrice: f.sellPrice }]);
+                          if (f) {
+                            setBundleItems([
+                              ...bundleItems,
+                              {
+                                fruitId: f.id,
+                                fruitName: f.name,
+                                qty: f.unit === 'kg' ? 0.5 : 1,
+                                unit: f.unit,
+                                buyPrice: f.buyPrice,
+                                sellPrice: f.sellPrice
+                              }
+                            ]);
+                          }
                         }}
                         className="text-emerald-500 font-extrabold"
                       >
@@ -2272,7 +2385,14 @@ export default function App() {
                           const f = fruits.find((item) => item.id === e.target.value);
                           if (!f) return;
                           const copy = [...bundleItems];
-                          copy[idx] = { fruitId: f.id, fruitName: f.name, qty: copy[idx].qty, unit: f.unit, buyPrice: f.buyPrice, sellPrice: f.sellPrice };
+                          copy[idx] = {
+                            fruitId: f.id,
+                            fruitName: f.name,
+                            qty: copy[idx].qty,
+                            unit: f.unit,
+                            buyPrice: f.buyPrice,
+                            sellPrice: f.sellPrice
+                          };
                           setBundleItems(copy);
                         }}
                         style={{ backgroundColor: 'var(--bg-card)' }}
@@ -2295,7 +2415,7 @@ export default function App() {
                         style={{ backgroundColor: 'var(--bg-card)' }}
                         className="w-16 px-2 py-1.5 rounded-lg text-center font-bold outline-none"
                       />
-                      <span className="text-[11px] w-10 truncate">{it.unit}</span>
+                      <span className="text-[11px] w-11 truncate font-semibold">{it.unit}</span>
                       {bundleItems.length > 1 && (
                         <button
                           type="button"
