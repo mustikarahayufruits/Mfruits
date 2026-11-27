@@ -321,7 +321,7 @@ export default function App() {
   const [bankForm, setBankForm] = useState({ bank: '', number: '', holder: '' });
 
   const [financeModalOpen, setFinanceModalOpen] = useState(false);
-  const [financeForm, setFinanceForm] = useState({ type: 'opex', date: getTodayDateStr(), desc: '', amount: '', payMethod: 'cash' });
+  const [financeForm, setFinanceForm] = useState({ id: '', type: 'opex', date: getTodayDateStr(), desc: '', amount: '', payMethod: 'cash' });
 
   const [accountModalOpen, setAccountModalOpen] = useState(false);
 
@@ -1239,21 +1239,57 @@ ${banksText}`,
     showToast('Rekening pembayaran ditambahkan!');
   };
 
+  const openEditFinanceTrx = (t) => {
+    setFinanceForm({
+      id: t.id,
+      type: t.type,
+      date: t.date || getTodayDateStr(),
+      desc: t.desc || '',
+      amount: t.amount || '',
+      payMethod: t.paymentMethod || 'cash'
+    });
+    setFinanceModalOpen(true);
+  };
+
+  const handleDeleteCashflowTrx = async (t) => {
+    if (!user) return;
+    const batch = writeBatch(db);
+    batch.delete(storeDoc('transactions', t.id));
+    if (t.orderId && t.type === 'sale') {
+      batch.update(storeDoc('orders', t.orderId), { paymentStatus: 'unpaid' });
+    }
+    await batch.commit();
+    showToast(t.orderId ? 'Catatan kas dihapus & order dikembalikan ke Piutang.' : 'Transaksi kas dihapus!');
+  };
+
   const saveFinanceForm = async (e) => {
     e.preventDefault();
     if (!user) return;
-    const id = 't_' + Date.now();
-    await setDoc(storeDoc('transactions', id), {
-      id,
-      type: financeForm.type,
-      paymentMethod: financeForm.payMethod || 'cash',
-      date: financeForm.date || getTodayDateStr(),
-      desc: financeForm.desc.trim(),
-      amount: Number(financeForm.amount) || 0,
-      createdAt: Date.now()
-    });
-    setFinanceModalOpen(false);
-    showToast('Transaksi keuangan dicatat!');
+    if (financeForm.id) {
+      await updateDoc(storeDoc('transactions', financeForm.id), {
+        type: financeForm.type,
+        paymentMethod: financeForm.payMethod || 'cash',
+        date: financeForm.date || getTodayDateStr(),
+        ...(financeForm.type === 'sale' ? { paidDate: financeForm.date || getTodayDateStr() } : {}),
+        desc: financeForm.desc.trim(),
+        amount: Number(financeForm.amount) || 0
+      });
+      setFinanceModalOpen(false);
+      showToast('Transaksi berhasil diperbarui!');
+    } else {
+      const id = 't_' + Date.now();
+      await setDoc(storeDoc('transactions', id), {
+        id,
+        type: financeForm.type,
+        paymentMethod: financeForm.payMethod || 'cash',
+        date: financeForm.date || getTodayDateStr(),
+        desc: financeForm.desc.trim(),
+        amount: Number(financeForm.amount) || 0,
+        createdAt: Date.now()
+      });
+      setFinanceModalOpen(false);
+      showToast('Transaksi keuangan dicatat!');
+    }
   };
 
   // Sinkronisasi Penyeimbang Neraca untuk data lama sebelum pembaruan ini
@@ -1385,7 +1421,10 @@ ${banksText}`,
         items.push({ ...t, effectiveDate: t.date, dir: 'out' });
       }
     });
-    return { cfIn, cfInCash, cfInTransfer, cfOut, items };
+    const nonCashCapItems = transactions.filter(
+      (t) => t.type === 'capital' && t.paymentMethod === 'inventory' && isDateInPeriod(t.date, financePeriods.cashflow)
+    );
+    return { cfIn, cfInCash, cfInTransfer, cfOut, items, nonCashCapItems };
   }, [transactions, financePeriods.cashflow]);
 
   const stockOutHistory = useMemo(
@@ -2156,7 +2195,7 @@ ${banksText}`,
                 </div>
                 <button
                   onClick={() => {
-                    setFinanceForm({ type: 'opex', date: getTodayDateStr(), desc: '', amount: '', payMethod: 'cash' });
+                    setFinanceForm({ id: '', type: 'opex', date: getTodayDateStr(), desc: '', amount: '', payMethod: 'cash' });
                     setFinanceModalOpen(true);
                   }}
                   style={{ backgroundColor: 'var(--accent)' }}
@@ -2433,24 +2472,80 @@ ${banksText}`,
                   </div>
                   <div className="space-y-2">
                     {cashflowData.items.map((t) => (
-                      <div key={t.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3 flex items-center justify-between gap-2 text-xs">
-                        <div>
-                          <div className="flex items-center gap-1.5">
+                      <div key={t.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3 flex items-start justify-between gap-2 text-xs">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <strong>{t.desc}</strong>
-                            {t.dir === 'in' && (
+                            {t.paymentMethod && (
                               <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold ${t.paymentMethod === 'cash' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-sky-500/15 text-sky-500'}`}>
                                 {t.paymentMethod === 'cash' ? 'CASH' : 'TRANSFER'}
                               </span>
                             )}
                           </div>
-                          <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">{t.effectiveDate}</span>
+                          <span style={{ color: 'var(--text-muted)' }} className="text-[11px] block mt-0.5">{t.effectiveDate}</span>
                         </div>
-                        <strong className={t.dir === 'in' ? 'text-emerald-500' : 'text-rose-500'}>
-                          {t.dir === 'in' ? '+' : '-'}{formatRp(t.amount)}
-                        </strong>
+                        <div className="text-right shrink-0 space-y-1">
+                          <strong className={`block ${t.dir === 'in' ? 'text-emerald-500' : 'text-rose-500'}`}>
+                            {t.dir === 'in' ? '+' : '-'}{formatRp(t.amount)}
+                          </strong>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => openEditFinanceTrx(t)}
+                              style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                              className="px-2 py-0.5 rounded text-[10px] font-bold"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteCashflowTrx(t)}
+                              className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-500 text-[10px] font-bold"
+                            >
+                              Hapus
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ))}
                   </div>
+
+                  {cashflowData.nonCashCapItems.length > 0 && (
+                    <div className="pt-2 space-y-2">
+                      <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-extrabold uppercase block">
+                        Catatan Modal Awal Barang (Non-Tunai)
+                      </span>
+                      {cashflowData.nonCashCapItems.map((t) => (
+                        <div key={t.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3 flex items-start justify-between gap-2 text-xs">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <strong>{t.desc}</strong>
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-amber-500/15 text-amber-500">
+                                MODAL BARANG
+                              </span>
+                            </div>
+                            <span style={{ color: 'var(--text-muted)' }} className="text-[11px] block mt-0.5">{t.date}</span>
+                          </div>
+                          <div className="text-right shrink-0 space-y-1">
+                            <strong className="text-amber-500 block">{formatRp(t.amount)}</strong>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => openEditFinanceTrx(t)}
+                                style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                                className="px-2 py-0.5 rounded text-[10px] font-bold"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => handleDeleteCashflowTrx(t)}
+                                className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-500 text-[10px] font-bold"
+                              >
+                                Hapus
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </section>
@@ -3374,31 +3469,38 @@ ${banksText}`,
           </div>
         )}
 
-        {/* ================= MODAL 6: CATAT TRANSAKSI KEUANGAN ================= */}
+        {/* ================= MODAL 6: CATAT / EDIT TRANSAKSI KEUANGAN ================= */}
         {financeModalOpen && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center">
             <div style={{ backgroundColor: 'var(--bg-card)' }} className="w-full max-w-[440px] rounded-t-3xl sm:rounded-3xl p-5 space-y-3.5">
               <div className="flex items-center justify-between">
-                <h3 className="font-extrabold text-base">Catat Transaksi Keuangan</h3>
+                <h3 className="font-extrabold text-base">{financeForm.id ? 'Edit Transaksi Kas' : 'Catat Transaksi Keuangan'}</h3>
                 <button onClick={() => setFinanceModalOpen(false)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
               </div>
               <form onSubmit={saveFinanceForm} className="space-y-3 text-xs">
-                <select value={financeForm.type} onChange={(e) => setFinanceForm({ ...financeForm, type: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none">
-                  <option value="opex">Biaya Operasional (Plastik, Mika, Pita, Ongkir)</option>
-                  <option value="capital">Setoran Modal Tambahan</option>
-                  <option value="inventory_buy">Belanja Stok Buah (Masuk Persediaan)</option>
-                </select>
+                {financeForm.type === 'sale' ? (
+                  <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-3 py-2.5 rounded-xl font-bold text-emerald-500">
+                    Jenis: Penerimaan Penjualan
+                  </div>
+                ) : (
+                  <select value={financeForm.type} onChange={(e) => setFinanceForm({ ...financeForm, type: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none font-semibold">
+                    <option value="opex">Biaya Operasional (Plastik, Mika, Pita, Ongkir)</option>
+                    <option value="capital">Setoran Modal (Tunai / Barang)</option>
+                    <option value="inventory_buy">Belanja Stok Buah (Masuk Persediaan)</option>
+                  </select>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <input type="date" required value={financeForm.date} onChange={(e) => setFinanceForm({ ...financeForm, date: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
                   <select value={financeForm.payMethod} onChange={(e) => setFinanceForm({ ...financeForm, payMethod: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl font-bold outline-none">
                     <option value="transfer">Transfer</option>
                     <option value="cash">Cash (Tunai)</option>
+                    {financeForm.type === 'capital' && <option value="inventory">Modal Barang (Non-Tunai)</option>}
                   </select>
                 </div>
                 <input required placeholder="Keterangan" value={financeForm.desc} onChange={(e) => setFinanceForm({ ...financeForm, desc: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
                 <input type="number" required placeholder="Nominal (Rp)" value={financeForm.amount} onChange={(e) => setFinanceForm({ ...financeForm, amount: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
                 <button type="submit" style={{ backgroundColor: 'var(--accent)' }} className="w-full py-3 rounded-xl text-white font-extrabold">
-                  Simpan Transaksi
+                  {financeForm.id ? 'Simpan Perubahan' : 'Simpan Transaksi'}
                 </button>
               </form>
             </div>
