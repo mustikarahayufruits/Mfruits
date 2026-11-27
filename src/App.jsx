@@ -227,7 +227,7 @@ export default function App() {
 
   // Firestore collections
   const [fruits, setFruits] = useState([]);
-  const [bundles, setBundles] = useState([]); // Katalog Produk Paket Bundling
+  const [bundles, setBundles] = useState([]);
   const [orders, setOrders] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
@@ -263,7 +263,16 @@ export default function App() {
 
   // Modal Tambah/Edit Buah
   const [fruitModalOpen, setFruitModalOpen] = useState(false);
-  const [fruitForm, setFruitForm] = useState({ id: '', name: '', unit: 'kg', stock: 0, buyPrice: '', sellPrice: '', minStock: 1 });
+  const [fruitForm, setFruitForm] = useState({
+    id: '',
+    name: '',
+    unit: 'kg',
+    stock: 0,
+    buyPrice: '',
+    sellPrice: '',
+    minStock: 1,
+    stockSource: 'capital' // 'capital' (Modal Disetor Awal) | 'cash' (Beli dari Kas Toko)
+  });
 
   // Modal Tambah/Edit Master Paket Bundling
   const [bundleCatalogModalOpen, setBundleCatalogModalOpen] = useState(false);
@@ -279,6 +288,7 @@ export default function App() {
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkDate, setBulkDate] = useState(getTodayDateStr());
   const [bulkNote, setBulkNote] = useState('');
+  const [bulkPayMethod, setBulkPayMethod] = useState('cash');
   const [bulkRows, setBulkRows] = useState([]);
 
   // Modal Out Stock Non-Penjualan
@@ -293,7 +303,7 @@ export default function App() {
 
   // Modal Order (Order Satuan Multi-Buah vs Order Bundling dari Katalog)
   const [orderSheetOpen, setOrderSheetOpen] = useState(false);
-  const [orderMode, setOrderMode] = useState('single'); // 'single' (eceran multi-buah) | 'bundle' (dari katalog bundling)
+  const [orderMode, setOrderMode] = useState('single');
   const [orderCustomer, setOrderCustomer] = useState('');
   const [orderStatus, setOrderStatus] = useState('confirmed');
   const [orderCustomSell, setOrderCustomSell] = useState('');
@@ -317,7 +327,7 @@ export default function App() {
 
   const showToast = (msg) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 3000);
+    setTimeout(() => setToastMsg(''), 3200);
   };
 
   const copyTextSafe = (text, msg) => {
@@ -479,11 +489,13 @@ export default function App() {
     const allSales = transactions.filter((t) => t.type === 'sale');
     const allOpex = transactions.filter((t) => t.type === 'opex');
     const allStockOut = transactions.filter((t) => t.type === 'stock_out');
+    const allReval = transactions.filter((t) => t.type === 'revaluation');
     const totalRev = allSales.reduce((s, t) => s + Number(t.amount || 0), 0);
     const totalHpp = allSales.reduce((s, t) => s + Number(t.costAmount || 0), 0);
     const totalOpex = allOpex.reduce((s, t) => s + Number(t.amount || 0), 0);
     const totalLoss = allStockOut.reduce((s, t) => s + Number(t.amount || 0), 0);
-    const netProfitAll = totalRev - totalHpp - totalOpex - totalLoss;
+    const totalReval = allReval.reduce((s, t) => s + Number(t.amount || 0), 0);
+    const netProfitAll = totalRev - totalHpp - totalOpex - totalLoss + totalReval;
 
     return { inventoryValue, lowStockItems, shoppingList, totalShoppingCost, netProfitAll };
   }, [fruits, orders, transactions]);
@@ -494,22 +506,49 @@ export default function App() {
   const adjustStock = async (fruitId, delta, recordPurchase) => {
     const f = fruits.find((item) => item.id === fruitId);
     if (!f || !user) return;
-    const newStock = Math.max(0, Number((Number(f.stock) + delta).toFixed(3)));
-    await updateDoc(storeDoc('fruits', fruitId), { stock: newStock });
+    const oldStock = Number(f.stock || 0);
+    const newStock = Math.max(0, Number((oldStock + delta).toFixed(3)));
+    const actualDelta = Number((newStock - oldStock).toFixed(3));
+    if (actualDelta === 0) return;
 
-    if (recordPurchase && delta > 0) {
-      const cost = delta * Number(f.buyPrice);
+    const batch = writeBatch(db);
+    batch.update(storeDoc('fruits', fruitId), { stock: newStock });
+
+    if (recordPurchase && actualDelta > 0) {
+      const cost = actualDelta * Number(f.buyPrice);
       const tId = 't_' + Date.now();
-      await setDoc(storeDoc('transactions', tId), {
+      batch.set(storeDoc('transactions', tId), {
         id: tId,
         type: 'inventory_buy',
+        paymentMethod: 'cash',
         date: getTodayDateStr(),
-        desc: `Beli Stok ${f.name} (${delta} ${f.unit})`,
+        desc: `Beli Stok ${f.name} (${actualDelta} ${f.unit})`,
         amount: cost,
         createdAt: Date.now()
       });
-      showToast(`Stok ${f.name} +${delta} ${f.unit} (Persediaan +${formatRp(cost)})`);
+      await batch.commit();
+      showToast(`Stok ${f.name} +${actualDelta} ${f.unit} (Persediaan +${formatRp(cost)})`);
+    } else if (!recordPurchase && actualDelta < 0) {
+      // Penyesuaian berkurang non-penjualan dicatat sebagai penyusutan agar Neraca tetap seimbang
+      const lossVal = Math.abs(actualDelta) * Number(f.buyPrice);
+      const tId = 'adj_' + Date.now();
+      batch.set(storeDoc('transactions', tId), {
+        id: tId,
+        type: 'stock_out',
+        fruitId: f.id,
+        fruitName: f.name,
+        unit: f.unit,
+        qty: Math.abs(actualDelta),
+        reason: 'Penyesuaian Stok Cepat',
+        date: getTodayDateStr(),
+        desc: `Kurangi Stok Cepat: ${f.name} (${Math.abs(actualDelta)} ${f.unit})`,
+        amount: lossVal,
+        createdAt: Date.now()
+      });
+      await batch.commit();
+      showToast(`Stok ${f.name} sekarang ${newStock} ${f.unit}`);
     } else {
+      await batch.commit();
       showToast(`Stok ${f.name} sekarang ${newStock} ${f.unit}`);
     }
   };
@@ -535,6 +574,7 @@ export default function App() {
       batch.set(storeDoc('transactions', tId), {
         id: tId,
         type: 'inventory_buy',
+        paymentMethod: 'cash',
         date: getTodayDateStr(),
         desc: 'Belanja Stok Kekurangan Pesanan',
         amount: totalSpent,
@@ -546,12 +586,14 @@ export default function App() {
     showToast(`Semua belanja dibeli! Persediaan +${formatRp(totalSpent)}`);
   };
 
-  // Template Salin WA Daftar Belanja Supplier (dengan jeda baris rapi)
   const copyShoppingListWA = () => {
     if (metrics.shoppingList.length === 0) return showToast('Tidak ada daftar belanja yang kurang.');
     const itemsLines = metrics.shoppingList
-      .map((it, i) => `${i + 1}. ${it.fruitName} — *${it.deficit} ${it.unit}*\n    (Est. ${formatRp(it.estCost)})`)
-      .join('\n\n');
+      .map((it, i) => `${i + 1}. ${it.fruitName} — *${it.deficit} ${it.unit}*
+    (Est. ${formatRp(it.estCost)})`)
+      .join('
+
+');
 
     const msg = [
       '*DAFTAR BELANJA BUAH SUPPLIER — MFRUITS*',
@@ -559,40 +601,121 @@ export default function App() {
       itemsLines,
       '',
       `*Total Estimasi Belanja:* ${formatRp(metrics.totalShoppingCost)}`
-    ].join('\n');
+    ].join('
+');
 
     copyTextSafe(msg, 'Daftar belanja disalin untuk WhatsApp!');
   };
 
   const openFruitModal = (fruit) => {
     if (fruit) {
-      setFruitForm({ ...fruit });
+      setFruitForm({ ...fruit, stockSource: 'capital' });
     } else {
-      setFruitForm({ id: '', name: '', unit: 'kg', stock: 0, buyPrice: '', sellPrice: '', minStock: 1 });
+      setFruitForm({
+        id: '',
+        name: '',
+        unit: 'kg',
+        stock: 0,
+        buyPrice: '',
+        sellPrice: '',
+        minStock: 1,
+        stockSource: 'capital'
+      });
     }
     setFruitModalOpen(true);
   };
 
+  // Simpan Buah + Jurnal Penyeimbang Otomatis agar Neraca selalu Seimbang
   const saveFruitForm = async (e) => {
     e.preventDefault();
     if (!user) return;
+    const batch = writeBatch(db);
     const id = fruitForm.id || 'f_' + Date.now();
-    await setDoc(storeDoc('fruits', id), {
+    const newStock = Number(fruitForm.stock) || 0;
+    const newBuyPrice = Number(fruitForm.buyPrice) || 0;
+    const newSellPrice = Number(fruitForm.sellPrice) || 0;
+    const cleanName = fruitForm.name.trim();
+    const cleanUnit = (fruitForm.unit || 'kg').trim();
+
+    if (fruitForm.id) {
+      const oldFruit = fruits.find((f) => f.id === fruitForm.id);
+      const oldVal = oldFruit ? Number(oldFruit.stock || 0) * Number(oldFruit.buyPrice || 0) : 0;
+      const newVal = newStock * newBuyPrice;
+      const diffVal = Number((newVal - oldVal).toFixed(2));
+
+      if (Math.abs(diffVal) >= 1) {
+        const tId = 'rev_' + Date.now();
+        batch.set(storeDoc('transactions', tId), {
+          id: tId,
+          type: 'revaluation',
+          date: getTodayDateStr(),
+          desc: `Penyesuaian Nilai Stok: ${cleanName}`,
+          amount: diffVal,
+          createdAt: Date.now()
+        });
+      }
+    } else if (newStock > 0 && newBuyPrice > 0) {
+      const initVal = newStock * newBuyPrice;
+      const tId = 'init_' + Date.now();
+      if (fruitForm.stockSource === 'cash') {
+        batch.set(storeDoc('transactions', tId), {
+          id: tId,
+          type: 'inventory_buy',
+          paymentMethod: 'cash',
+          date: getTodayDateStr(),
+          desc: `Stok Awal (Kas Toko): ${cleanName} (${newStock} ${cleanUnit})`,
+          amount: initVal,
+          createdAt: Date.now()
+        });
+      } else {
+        batch.set(storeDoc('transactions', tId), {
+          id: tId,
+          type: 'capital',
+          paymentMethod: 'inventory',
+          date: getTodayDateStr(),
+          desc: `Modal Awal Persediaan: ${cleanName} (${newStock} ${cleanUnit})`,
+          amount: initVal,
+          createdAt: Date.now()
+        });
+      }
+    }
+
+    batch.set(storeDoc('fruits', id), {
       id,
-      name: fruitForm.name.trim(),
-      unit: (fruitForm.unit || 'kg').trim(),
-      stock: Number(fruitForm.stock) || 0,
-      buyPrice: Number(fruitForm.buyPrice) || 0,
-      sellPrice: Number(fruitForm.sellPrice) || 0,
+      name: cleanName,
+      unit: cleanUnit,
+      stock: newStock,
+      buyPrice: newBuyPrice,
+      sellPrice: newSellPrice,
       minStock: Number(fruitForm.minStock) || 1
     });
+
+    await batch.commit();
     setFruitModalOpen(false);
-    showToast(fruitForm.id ? 'Data buah diperbarui!' : 'Buah baru ditambahkan!');
+    showToast(fruitForm.id ? 'Data buah diperbarui!' : 'Buah baru ditambahkan & Neraca tercatat!');
   };
 
   const deleteFruit = async (fruitId) => {
     if (!user) return;
-    await deleteDoc(storeDoc('fruits', fruitId));
+    const target = fruits.find((f) => f.id === fruitId);
+    const batch = writeBatch(db);
+    if (target) {
+      const remVal = Number(target.stock || 0) * Number(target.buyPrice || 0);
+      if (remVal > 0) {
+        const tId = 'del_' + Date.now();
+        batch.set(storeDoc('transactions', tId), {
+          id: tId,
+          type: 'stock_out',
+          reason: 'Hapus Item Stok',
+          date: getTodayDateStr(),
+          desc: `Hapus Item Buah: ${target.name} (${target.stock} ${target.unit})`,
+          amount: remVal,
+          createdAt: Date.now()
+        });
+      }
+    }
+    batch.delete(storeDoc('fruits', fruitId));
+    await batch.commit();
     showToast('Item buah dihapus.');
   };
 
@@ -660,7 +783,7 @@ export default function App() {
       sellPrice: Number(bundleCatalogForm.sellPrice) || 0,
       desc: bundleCatalogForm.desc.trim(),
       items: normalizedItems,
-      createdAt: bundleCatalogForm.id ? Date.now() : Date.now()
+      createdAt: Date.now()
     });
     setBundleCatalogModalOpen(false);
     showToast(bundleCatalogForm.id ? 'Paket bundling diperbarui!' : 'Produk bundling baru disimpan!');
@@ -739,6 +862,7 @@ export default function App() {
     ]);
     setBulkDate(getTodayDateStr());
     setBulkNote('');
+    setBulkPayMethod('cash');
     setBulkModalOpen(true);
   };
 
@@ -770,8 +894,27 @@ export default function App() {
           r.sellPrice !== '' && Number(r.sellPrice) > 0 ? Number(r.sellPrice) : Math.round(buyPrice * 1.25);
 
         if (existing) {
+          const oldVal = Number(existing.stock || 0) * Number(existing.buyPrice || 0);
+          const effectiveBuy = buyPrice > 0 ? buyPrice : Number(existing.buyPrice || 0);
+          const newTotalStock = Number((Number(existing.stock) + qty).toFixed(3));
+          const expectedVal = oldVal + qty * buyPrice;
+          const actualVal = newTotalStock * effectiveBuy;
+          const revalDiff = Number((actualVal - expectedVal).toFixed(2));
+
+          if (Math.abs(revalDiff) >= 1) {
+            const revId = 'rev_' + Date.now() + '_' + idx;
+            batch.set(storeDoc('transactions', revId), {
+              id: revId,
+              type: 'revaluation',
+              date: bulkDate || getTodayDateStr(),
+              desc: `Penyesuaian Harga Modal: ${existing.name}`,
+              amount: revalDiff,
+              createdAt: Date.now()
+            });
+          }
+
           batch.update(storeDoc('fruits', existing.id), {
-            stock: Number((Number(existing.stock) + qty).toFixed(3)),
+            stock: newTotalStock,
             ...(buyPrice > 0 ? { buyPrice } : {}),
             ...(r.sellPrice !== '' && Number(r.sellPrice) > 0 ? { sellPrice: Number(r.sellPrice) } : {})
           });
@@ -793,8 +936,27 @@ export default function App() {
       } else {
         const found = fruits.find((f) => f.id === r.fruitId);
         if (found) {
+          const oldVal = Number(found.stock || 0) * Number(found.buyPrice || 0);
+          const effectiveBuy = buyPrice > 0 ? buyPrice : Number(found.buyPrice || 0);
+          const newTotalStock = Number((Number(found.stock) + qty).toFixed(3));
+          const expectedVal = oldVal + qty * buyPrice;
+          const actualVal = newTotalStock * effectiveBuy;
+          const revalDiff = Number((actualVal - expectedVal).toFixed(2));
+
+          if (Math.abs(revalDiff) >= 1) {
+            const revId = 'rev_' + Date.now() + '_' + idx;
+            batch.set(storeDoc('transactions', revId), {
+              id: revId,
+              type: 'revaluation',
+              date: bulkDate || getTodayDateStr(),
+              desc: `Penyesuaian Harga Modal: ${found.name}`,
+              amount: revalDiff,
+              createdAt: Date.now()
+            });
+          }
+
           batch.update(storeDoc('fruits', found.id), {
-            stock: Number((Number(found.stock) + qty).toFixed(3)),
+            stock: newTotalStock,
             ...(buyPrice > 0 ? { buyPrice } : {}),
             ...(r.sellPrice !== '' && Number(r.sellPrice) > 0 ? { sellPrice: Number(r.sellPrice) } : {})
           });
@@ -808,6 +970,7 @@ export default function App() {
       batch.set(storeDoc('transactions', tId), {
         id: tId,
         type: 'inventory_buy',
+        paymentMethod: bulkPayMethod,
         date: bulkDate || getTodayDateStr(),
         desc: `Belanja Stok${bulkNote ? ' (' + bulkNote + ')' : ''}: ${summaryNames.join(', ')}`,
         amount: grandTotal,
@@ -945,29 +1108,38 @@ export default function App() {
     showToast('Order baru berhasil dicatat!');
   };
 
-  // Template Salin WA Rincian Pembayaran Pelanggan (dengan jeda baris rapi)
   const copyOrderPaymentWA = (o) => {
     const itemsText =
       o.items && o.items.length > 0
-        ? o.items.map((it, idx) => `${idx + 1}. ${it.fruitName} — ${it.qty} ${it.unit}`).join('\n')
+        ? o.items.map((it, idx) => `${idx + 1}. ${it.fruitName} — ${it.qty} ${it.unit}`).join('
+')
         : o.notes || '-';
 
     const banksText =
       bankAccounts.length > 0
-        ? bankAccounts.map((b) => `• *${b.bank}*: ${b.number}\n  a.n. ${b.holder}`).join('\n\n')
+        ? bankAccounts.map((b) => `• *${b.bank}*: ${b.number}
+  a.n. ${b.holder}`).join('
+
+')
         : '• (Belum ada rekening tersimpan)';
 
     const sections = [
       `Halo Kak *${o.customer}*, berikut rincian pesanan buahnya di *MFruits* ya:`,
       o.orderType === 'bundle' && o.bundleName ? `*Paket:* ${o.bundleName} (${o.bundleQty || 1} paket)` : null,
-      `*Daftar Buah:*\n${itemsText}`,
+      `*Daftar Buah:*
+${itemsText}`,
       o.notes ? `_Catatan: ${o.notes}_` : null,
-      `*Total Pembayaran:*\n*${formatRp(o.totalSell)}*`,
-      `Pembayaran bisa melalui Cash atau transfer ke rekening berikut:\n\n${banksText}`,
+      `*Total Pembayaran:*
+*${formatRp(o.totalSell)}*`,
+      `Pembayaran bisa melalui Cash atau transfer ke rekening berikut:
+
+${banksText}`,
       'Terima kasih sudah berbelanja di *MFruits*! 🍎🍊'
     ].filter(Boolean);
 
-    copyTextSafe(sections.join('\n\n'), 'Rincian pesanan & info pembayaran disalin untuk WA!');
+    copyTextSafe(sections.join('
+
+'), 'Rincian pesanan & info pembayaran disalin untuk WA!');
   };
 
   const confirmCompleteOrder = async (payStatus) => {
@@ -975,10 +1147,14 @@ export default function App() {
     const o = completeOrderTarget;
     const batch = writeBatch(db);
 
+    // Hitung HPP aktual berdasarkan harga modal buah terkini agar selisih stok & HPP selalu 100% klop
+    let actualTotalCost = 0;
     (o.items || []).forEach((it) => {
       const f =
         fruits.find((item) => item.id === it.fruitId) ||
         fruits.find((item) => item.name.trim().toLowerCase() === it.fruitName.trim().toLowerCase());
+      const unitBuy = f ? Number(f.buyPrice || 0) : Number(it.buyPrice || 0);
+      actualTotalCost += Number(it.qty || 0) * unitBuy;
       if (f) {
         batch.update(storeDoc('fruits', f.id), {
           stock: Math.max(0, Number((Number(f.stock) - Number(it.qty)).toFixed(3)))
@@ -992,6 +1168,7 @@ export default function App() {
       status: 'completed',
       paymentStatus: payStatus,
       completedDate: completeDate,
+      totalCost: actualTotalCost,
       ...methodObj
     });
 
@@ -1008,7 +1185,7 @@ export default function App() {
       items: o.items || [],
       desc: `Penjualan: ${o.customer} (${o.notes})`,
       amount: Number(o.totalSell),
-      costAmount: Number(o.totalCost),
+      costAmount: actualTotalCost,
       createdAt: Date.now()
     });
 
@@ -1087,8 +1264,24 @@ export default function App() {
     showToast('Transaksi keuangan dicatat!');
   };
 
+  // Sinkronisasi Penyeimbang Neraca untuk data lama sebelum pembaruan ini
+  const syncLegacyBalanceDiff = async (diffAmount) => {
+    if (!user || Math.abs(diffAmount) < 1) return;
+    const id = 'sync_cap_' + Date.now();
+    await setDoc(storeDoc('transactions', id), {
+      id,
+      type: 'capital',
+      paymentMethod: 'inventory',
+      date: getTodayDateStr(),
+      desc: 'Penyesuaian Modal Awal Stok Lama',
+      amount: diffAmount,
+      createdAt: Date.now()
+    });
+    showToast(`Selisih ${formatRp(diffAmount)} berhasil dicatat sebagai Modal Awal Stok!`);
+  };
+
   // ==========================================================================
-  // 10. DATA KEUANGAN PER PERIODE
+  // 10. DATA KEUANGAN PER PERIODE & AUDIT NERACA DINAMIS
   // ==========================================================================
   const salesList = useMemo(
     () => transactions.filter((t) => t.type === 'sale' && isDateInPeriod(t.date, financePeriods.sales)),
@@ -1120,14 +1313,19 @@ export default function App() {
     const gross = rev - hpp;
     const opex = list.filter((t) => t.type === 'opex').reduce((s, t) => s + Number(t.amount || 0), 0);
     const stockLoss = list.filter((t) => t.type === 'stock_out').reduce((s, t) => s + Number(t.amount || 0), 0);
-    const net = gross - opex - stockLoss;
+    const reval = list.filter((t) => t.type === 'revaluation').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const net = gross - opex - stockLoss + reval;
     const margin = rev > 0 ? Math.round((net / rev) * 100) : 0;
-    return { rev, hpp, gross, opex, stockLoss, net, margin };
+    return { rev, hpp, gross, opex, stockLoss, reval, net, margin };
   }, [transactions, financePeriods.pnl]);
 
   const balanceData = useMemo(() => {
     const list = transactions.filter((t) => isDateInPeriod(t.date, financePeriods.balance));
     const capIn = list.filter((t) => t.type === 'capital').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const capCashIn = list
+      .filter((t) => t.type === 'capital' && t.paymentMethod !== 'inventory')
+      .reduce((s, t) => s + Number(t.amount || 0), 0);
+
     const paidSales = list.filter((t) => t.type === 'sale' && t.paymentStatus === 'paid');
     const paidTotal = paidSales.reduce((s, t) => s + Number(t.amount || 0), 0);
     const paidCashOnly = paidSales
@@ -1141,21 +1339,30 @@ export default function App() {
     const invBought = list.filter((t) => t.type === 'inventory_buy').reduce((s, t) => s + Number(t.amount || 0), 0);
     const opexPaid = list.filter((t) => t.type === 'opex').reduce((s, t) => s + Number(t.amount || 0), 0);
     const stockLoss = list.filter((t) => t.type === 'stock_out').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const reval = list.filter((t) => t.type === 'revaluation').reduce((s, t) => s + Number(t.amount || 0), 0);
 
     const rev = list.filter((t) => t.type === 'sale').reduce((s, t) => s + Number(t.amount || 0), 0);
     const hpp = list.filter((t) => t.type === 'sale').reduce((s, t) => s + Number(t.costAmount || 0), 0);
-    const net = rev - hpp - opexPaid - stockLoss;
-    const cash = capIn + paidTotal - invBought - opexPaid;
+    const net = rev - hpp - opexPaid - stockLoss + reval;
+    const cash = capCashIn + paidTotal - invBought - opexPaid;
+
+    const totalAssets = cash + unpaidAr + metrics.inventoryValue;
+    const totalEquity = capIn + net;
+    const diff = Math.round(totalAssets - totalEquity);
+    const isBalanced = Math.abs(diff) < 1;
+
     return {
       cash,
       paidCashOnly,
       paidTransferOnly,
       unpaidAr,
       inv: metrics.inventoryValue,
-      totalAssets: cash + unpaidAr + metrics.inventoryValue,
+      totalAssets,
       capIn,
       net,
-      totalEquity: capIn + net
+      totalEquity,
+      diff,
+      isBalanced
     };
   }, [transactions, financePeriods.balance, metrics.inventoryValue]);
 
@@ -1166,7 +1373,7 @@ export default function App() {
     let cfOut = 0;
     const items = [];
     transactions.forEach((t) => {
-      if (t.type === 'capital' && isDateInPeriod(t.date, financePeriods.cashflow)) {
+      if (t.type === 'capital' && t.paymentMethod !== 'inventory' && isDateInPeriod(t.date, financePeriods.cashflow)) {
         const amt = Number(t.amount || 0);
         cfIn += amt;
         if (t.paymentMethod === 'cash') cfInCash += amt;
@@ -1520,7 +1727,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* Filter Tabs termasuk Katalog Paket Bundling */}
               <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-bold pb-0.5">
                 {[
                   { id: 'all', label: `Semua Buah (${fruits.length})` },
@@ -1544,7 +1750,6 @@ export default function App() {
                 ))}
               </div>
 
-              {/* SUB-VIEW A: KATALOG PRODUK PAKET BUNDLING */}
               {stockFilter === 'bundles' ? (
                 <div className="space-y-2.5">
                   {bundles.length === 0 ? (
@@ -1603,7 +1808,6 @@ export default function App() {
                   )}
                 </div>
               ) : stockFilter === 'out_history' ? (
-                /* SUB-VIEW B: RIWAYAT OUT STOCK NON-PENJUALAN */
                 <div className="space-y-2.5">
                   {stockOutHistory.length === 0 ? (
                     <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
@@ -1636,7 +1840,6 @@ export default function App() {
                   Belum ada data stok buah. Tekan <b>+ Belanja</b> atau <b>+ Buah</b> untuk mulai mengisi.
                 </div>
               ) : (
-                /* SUB-VIEW C: DAFTAR STOK BUAH */
                 <div className="space-y-2.5">
                   {fruits
                     .filter((f) =>
@@ -2154,17 +2357,48 @@ export default function App() {
                     <div style={{ borderColor: 'var(--border-color)' }} className="flex justify-between pt-1.5 border-t"><span className="font-bold">Laba Kotor</span><strong>{formatRp(pnlData.gross)}</strong></div>
                     <div className="flex justify-between"><span style={{ color: 'var(--text-muted)' }}>Biaya Operasional</span><strong className="text-rose-500">-{formatRp(pnlData.opex)}</strong></div>
                     <div className="flex justify-between"><span style={{ color: 'var(--text-muted)' }}>Kerugian Out Stok (Busuk/Rusak/Tester)</span><strong className="text-rose-500">-{formatRp(pnlData.stockLoss)}</strong></div>
+                    {pnlData.reval !== 0 && (
+                      <div className="flex justify-between">
+                        <span style={{ color: 'var(--text-muted)' }}>Penyesuaian Nilai Modal Stok</span>
+                        <strong className={pnlData.reval >= 0 ? 'text-emerald-500' : 'text-rose-500'}>
+                          {pnlData.reval >= 0 ? '+' : ''}{formatRp(pnlData.reval)}
+                        </strong>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* SUB-TAB 3: NERACA */}
+              {/* SUB-TAB 3: NERACA (STATUS DINAMIS & PENYEIMBANG OTOMATIS) */}
               {financeSubTab === 'balance' && (
                 <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-4 space-y-3 text-xs">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="font-extrabold text-sm">Posisi Neraca Usaha</span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-500">SEIMBANG</span>
+                    {balanceData.isBalanced ? (
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/15 text-emerald-500">
+                        SEIMBANG
+                      </span>
+                    ) : (
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/15 text-amber-500">
+                        SELISIH {formatRp(Math.abs(balanceData.diff))}
+                      </span>
+                    )}
                   </div>
+
+                  {!balanceData.isBalanced && (
+                    <div className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 space-y-2 text-[11px]">
+                      <p className="text-amber-600 dark:text-amber-300 font-semibold leading-relaxed">
+                        Terdapat selisih <b>{formatRp(balanceData.diff)}</b> antara Total Aktiva dan Pasiva (biasanya dari input stok awal barang sebelum pencatatan modal).
+                      </p>
+                      <button
+                        onClick={() => syncLegacyBalanceDiff(balanceData.diff)}
+                        className="w-full py-2 rounded-lg bg-amber-500 text-white font-extrabold"
+                      >
+                        Sesuaikan ke Modal Awal Stok Sekarang
+                      </button>
+                    </div>
+                  )}
+
                   <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3 rounded-xl space-y-1.5">
                     <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-extrabold uppercase block">AKTIVA (HARTA USAHA)</span>
                     <div className="flex justify-between"><span>Kas & Saldo Rekening</span><strong>{formatRp(balanceData.cash)}</strong></div>
@@ -2369,6 +2603,21 @@ export default function App() {
                   </div>
                 </div>
 
+                {!fruitForm.id && Number(fruitForm.stock) > 0 && (
+                  <div>
+                    <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Asal Dana Stok Awal Ini</label>
+                    <select
+                      value={fruitForm.stockSource}
+                      onChange={(e) => setFruitForm({ ...fruitForm, stockSource: e.target.value })}
+                      style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                      className="w-full px-3 py-2.5 rounded-xl font-semibold outline-none"
+                    >
+                      <option value="capital">Modal Awal Barang (Masuk ke Modal Disetor)</option>
+                      <option value="cash">Dibeli dari Kas Toko (Mengurangi Kas)</option>
+                    </select>
+                  </div>
+                )}
+
                 <button type="submit" style={{ backgroundColor: 'var(--accent)' }} className="w-full py-3 rounded-xl text-white font-extrabold">
                   Simpan Data Buah
                 </button>
@@ -2568,8 +2817,12 @@ export default function App() {
               <form onSubmit={saveBulkRestockForm} className="space-y-3 text-xs">
                 <div className="grid grid-cols-2 gap-2">
                   <input type="date" value={bulkDate} onChange={(e) => setBulkDate(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2 rounded-xl outline-none" />
-                  <input placeholder="Supplier / Catatan" value={bulkNote} onChange={(e) => setBulkNote(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2 rounded-xl outline-none" />
+                  <select value={bulkPayMethod} onChange={(e) => setBulkPayMethod(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2 rounded-xl font-bold outline-none">
+                    <option value="cash">Bayar Cash</option>
+                    <option value="transfer">Bayar Transfer</option>
+                  </select>
                 </div>
+                <input placeholder="Supplier / Catatan Belanja (Opsional)" value={bulkNote} onChange={(e) => setBulkNote(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2 rounded-xl outline-none" />
 
                 <div className="flex justify-between items-center">
                   <span className="font-bold">Daftar Buah Dibeli</span>
@@ -2781,7 +3034,6 @@ export default function App() {
                 <button onClick={() => setOrderSheetOpen(false)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
               </div>
 
-              {/* Switch Mode Order Satuan (Multi-Buah Non-Paket) vs Order Bundling (Produk Paket) */}
               <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="grid grid-cols-2 gap-1.5 p-1 rounded-xl text-xs font-bold">
                 <button
                   type="button"
@@ -2817,7 +3069,6 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* FORM MODE 1: ORDER SATUAN (BISA > 1 MACAM BUAH + INPUT GRAM DETAIL) */}
                 {orderMode === 'single' ? (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
@@ -2897,7 +3148,6 @@ export default function App() {
                           )}
                         </div>
 
-                        {/* Helper Konversi Gram & Tombol Cepat Khusus Satuan kg */}
                         {it.unit === 'kg' && Number(it.qty) > 0 && (
                           <div className="flex items-center justify-between text-[10px] px-1">
                             <span className="text-emerald-500 font-semibold">{formatWeightDetail(it.qty, 'kg')}</span>
@@ -2938,7 +3188,6 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  /* FORM MODE 2: ORDER BUNDLING (PILIH DARI KATALOG PAKET BUNDLING) */
                   <div className="space-y-2.5">
                     {bundles.length === 0 ? (
                       <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3.5 rounded-xl text-center space-y-2">
