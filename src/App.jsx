@@ -591,9 +591,7 @@ export default function App() {
     const itemsLines = metrics.shoppingList
       .map((it, i) => `${i + 1}. ${it.fruitName} — *${it.deficit} ${it.unit}*
     (Est. ${formatRp(it.estCost)})`)
-      .join('
-
-');
+      .join('\n\n');
 
     const msg = [
       '*DAFTAR BELANJA BUAH SUPPLIER — MFRUITS*',
@@ -601,8 +599,7 @@ export default function App() {
       itemsLines,
       '',
       `*Total Estimasi Belanja:* ${formatRp(metrics.totalShoppingCost)}`
-    ].join('
-');
+    ].join('\n');
 
     copyTextSafe(msg, 'Daftar belanja disalin untuk WhatsApp!');
   };
@@ -1111,16 +1108,13 @@ export default function App() {
   const copyOrderPaymentWA = (o) => {
     const itemsText =
       o.items && o.items.length > 0
-        ? o.items.map((it, idx) => `${idx + 1}. ${it.fruitName} — ${it.qty} ${it.unit}`).join('
-')
+        ? o.items.map((it, idx) => `${idx + 1}. ${it.fruitName} — ${it.qty} ${it.unit}`).join('\n')
         : o.notes || '-';
 
     const banksText =
       bankAccounts.length > 0
         ? bankAccounts.map((b) => `• *${b.bank}*: ${b.number}
-  a.n. ${b.holder}`).join('
-
-')
+  a.n. ${b.holder}`).join('\n\n')
         : '• (Belum ada rekening tersimpan)';
 
     const sections = [
@@ -1137,9 +1131,7 @@ ${banksText}`,
       'Terima kasih sudah berbelanja di *MFruits*! 🍎🍊'
     ].filter(Boolean);
 
-    copyTextSafe(sections.join('
-
-'), 'Rincian pesanan & info pembayaran disalin untuk WA!');
+    copyTextSafe(sections.join('\n\n'), 'Rincian pesanan & info pembayaran disalin untuk WA!');
   };
 
   const confirmCompleteOrder = async (payStatus) => {
