@@ -2587,22 +2587,6 @@ ${banksText}`,
 
                                 <div className="flex items-center gap-1">
                                   <button
-                                    onClick={() => adjustStock(f.id, f.unit === 'kg' ? -0.25 : -1, false)}
-                                    title={f.unit === 'kg' ? 'Kurangi 0.25 kg' : 'Kurangi 1'}
-                                    style={{ backgroundColor: 'var(--bg-card-sub)' }}
-                                    className="w-7 h-7 rounded-lg font-extrabold text-xs flex items-center justify-center"
-                                  >
-                                    -
-                                  </button>
-                                  <button
-                                    onClick={() => adjustStock(f.id, 1, true)}
-                                    title="Tambah Beli +1"
-                                    style={{ backgroundColor: 'var(--accent)' }}
-                                    className="w-7 h-7 rounded-lg text-white font-extrabold text-xs flex items-center justify-center"
-                                  >
-                                    +
-                                  </button>
-                                  <button
                                     onClick={() => openFruitModal(f)}
                                     title="Edit / Hapus Buah"
                                     style={{ backgroundColor: 'var(--bg-card-sub)', color: 'var(--text-muted)' }}
