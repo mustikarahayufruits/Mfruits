@@ -15,7 +15,8 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
-  writeBatch
+  writeBatch,
+  deleteField
 } from 'firebase/firestore';
 
 // ============================================================================
@@ -51,6 +52,14 @@ function getTodayDateStr() {
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
+
+let _uidCounter = 0;
+function uid(prefix) {
+  _uidCounter += 1;
+  return `${prefix}_${Date.now()}_${_uidCounter}`;
+}
+const r3 = (n) => Number(Number(n || 0).toFixed(3));
+const nrm = (s) => (s || '').trim().toLowerCase();
 
 function formatRp(num) {
   return 'Rp ' + Math.round(Number(num || 0)).toLocaleString('id-ID');
@@ -309,6 +318,7 @@ export default function App() {
   const [orderStatus, setOrderStatus] = useState('confirmed');
   const [orderCustomSell, setOrderCustomSell] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
+  const [editingOrderId, setEditingOrderId] = useState('');
   const [singleOrderItems, setSingleOrderItems] = useState([]);
   const [selectedBundleId, setSelectedBundleId] = useState('');
   const [bundleOrderQty, setBundleOrderQty] = useState(1);
@@ -443,6 +453,101 @@ export default function App() {
 
   const storeDoc = (colName, id) => doc(db, `artifacts/${APP_ID}/users/mfruits_store/${colName}`, id);
 
+  // Cari buah untuk sebuah item order/belanja: id -> nama+satuan -> nama
+  const findFruitForItem = (it) =>
+    fruits.find((f) => f.id === it.fruitId) ||
+    fruits.find((f) => nrm(f.name) === nrm(it.fruitName) && nrm(f.unit) === nrm(it.unit)) ||
+    fruits.find((f) => nrm(f.name) === nrm(it.fruitName)) ||
+    null;
+
+  // Gabungkan item per buah (mencegah update ganda pada dokumen yang sama dalam satu batch)
+  const aggregateItems = (items) => {
+    const map = {};
+    const missing = [];
+    (items || []).forEach((it) => {
+      const f = findFruitForItem(it);
+      if (!f) {
+        missing.push(it.fruitName || '(tanpa nama)');
+        return;
+      }
+      if (!map[f.id]) map[f.id] = { fruit: f, qty: 0 };
+      map[f.id].qty = r3(map[f.id].qty + Number(it.qty || 0));
+    });
+    return { map, missing };
+  };
+
+  // Sinkronkan nama/satuan/harga buah ke order yang belum selesai & katalog bundling
+  const syncFruitRefs = (batch, fruitList) => {
+    const byId = {};
+    fruitList.forEach((f) => (byId[f.id] = f));
+    const patchItems = (items) =>
+      (items || []).map((it) => {
+        const f = byId[it.fruitId];
+        return f
+          ? { ...it, fruitName: f.name, unit: f.unit, buyPrice: Number(f.buyPrice || 0), sellPrice: Number(f.sellPrice || 0) }
+          : it;
+      });
+    orders
+      .filter((o) => o.status !== 'completed' && (o.items || []).some((it) => byId[it.fruitId]))
+      .forEach((o) => {
+        const items = patchItems(o.items);
+        const totalCost = items.reduce((s, it) => s + Number(it.qty || 0) * Number(it.buyPrice || 0), 0);
+        batch.update(storeDoc('orders', o.id), { items, totalCost });
+      });
+    bundles
+      .filter((b) => (b.items || []).some((it) => byId[it.fruitId]))
+      .forEach((b) => batch.update(storeDoc('bundles', b.id), { items: patchItems(b.items) }));
+  };
+
+  // Batalkan penyelesaian order: stok kembali, catatan penjualan dihapus, neraca tetap seimbang
+  const buildRevertCompletion = (batch, o, saleTrx, resetOrder) => {
+    const stockMap = {};
+    const deductions = saleTrx && Array.isArray(saleTrx.deductions) ? saleTrx.deductions : [];
+    if (deductions.length > 0) {
+      deductions.forEach((d) => {
+        const f = fruits.find((x) => x.id === d.fruitId);
+        if (!f) return;
+        const prev = stockMap[f.id] ? stockMap[f.id].qty : 0;
+        stockMap[f.id] = { fruit: f, qty: r3(prev + Number(d.qty || 0)) };
+      });
+    } else {
+      Object.assign(stockMap, aggregateItems((o && o.items) || (saleTrx && saleTrx.items) || []).map);
+    }
+
+    let restoredValue = 0;
+    Object.values(stockMap).forEach(({ fruit, qty }) => {
+      restoredValue += qty * Number(fruit.buyPrice || 0);
+      batch.update(storeDoc('fruits', fruit.id), { stock: r3(Number(fruit.stock || 0) + qty) });
+    });
+
+    if (saleTrx) {
+      batch.delete(storeDoc('transactions', saleTrx.id));
+      const hpp = Number(saleTrx.costAmount != null ? saleTrx.costAmount : o ? o.totalCost : 0) || 0;
+      const diff = Number((restoredValue - hpp).toFixed(2));
+      if (Math.abs(diff) >= 1) {
+        const revId = uid('rev');
+        batch.set(storeDoc('transactions', revId), {
+          id: revId,
+          type: 'revaluation',
+          date: getTodayDateStr(),
+          desc: `Penyesuaian Pembatalan Penjualan: ${(o && o.customer) || saleTrx.customer || ''}`,
+          amount: diff,
+          createdAt: Date.now()
+        });
+      }
+    }
+
+    if (o && resetOrder) {
+      batch.update(storeDoc('orders', o.id), {
+        status: 'confirmed',
+        paymentStatus: 'unpaid',
+        completedDate: deleteField(),
+        paidDate: deleteField(),
+        paymentMethod: deleteField()
+      });
+    }
+  };
+
   // ==========================================================================
   // 6. KALKULASI METRIK UTAMA
   // ==========================================================================
@@ -455,20 +560,22 @@ export default function App() {
       .filter((o) => o.status !== 'completed')
       .forEach((o) => {
         (o.items || []).forEach((it) => {
-          const key = `${(it.fruitName || '').trim().toLowerCase()}|${(it.unit || '').trim().toLowerCase()}`;
-          if (!demandMap[key]) demandMap[key] = { fruitName: it.fruitName, unit: it.unit, needed: 0 };
+          const fr =
+            fruits.find((f) => f.id === it.fruitId) ||
+            fruits.find((f) => nrm(f.name) === nrm(it.fruitName) && nrm(f.unit) === nrm(it.unit)) ||
+            fruits.find((f) => nrm(f.name) === nrm(it.fruitName)) ||
+            null;
+          const key = fr ? `id:${fr.id}` : `n:${nrm(it.fruitName)}|${nrm(it.unit)}`;
+          if (!demandMap[key]) {
+            demandMap[key] = { fruit: fr, fruitName: fr ? fr.name : it.fruitName, unit: fr ? fr.unit : it.unit, needed: 0 };
+          }
           demandMap[key].needed = Number((demandMap[key].needed + Number(it.qty || 0)).toFixed(3));
         });
       });
 
     const shoppingList = Object.values(demandMap)
       .map((d) => {
-        const fruit =
-          fruits.find(
-            (f) =>
-              f.name.trim().toLowerCase() === d.fruitName.trim().toLowerCase() &&
-              (f.unit || '').trim().toLowerCase() === (d.unit || '').trim().toLowerCase()
-          ) || fruits.find((f) => f.name.trim().toLowerCase() === d.fruitName.trim().toLowerCase());
+        const fruit = d.fruit;
         const stock = fruit ? Number(fruit.stock) : 0;
         const buyPrice = fruit ? Number(fruit.buyPrice) : 0;
         const deficit = Math.max(0, Number((d.needed - stock).toFixed(3)));
@@ -517,7 +624,7 @@ export default function App() {
 
     if (recordPurchase && actualDelta > 0) {
       const cost = actualDelta * Number(f.buyPrice);
-      const tId = 't_' + Date.now();
+      const tId = uid('t');
       batch.set(storeDoc('transactions', tId), {
         id: tId,
         type: 'inventory_buy',
@@ -533,7 +640,7 @@ export default function App() {
     } else if (!recordPurchase && actualDelta < 0) {
       // Penyesuaian berkurang non-penjualan dicatat sebagai penyusutan agar Neraca tetap seimbang
       const lossVal = Math.abs(actualDelta) * Number(f.buyPrice);
-      const tId = 'adj_' + Date.now();
+      const tId = uid('adj');
       batch.set(storeDoc('transactions', tId), {
         id: tId,
         type: 'stock_out',
@@ -574,7 +681,7 @@ export default function App() {
     });
 
     if (totalSpent > 0) {
-      const tId = 't_' + Date.now();
+      const tId = uid('t');
       batch.set(storeDoc('transactions', tId), {
         id: tId,
         type: 'inventory_buy',
@@ -632,12 +739,19 @@ export default function App() {
     e.preventDefault();
     if (!user) return;
     const batch = writeBatch(db);
-    const id = fruitForm.id || 'f_' + Date.now();
+    const id = fruitForm.id || uid('f');
     const newStock = Number(fruitForm.stock) || 0;
     const newBuyPrice = Number(fruitForm.buyPrice) || 0;
     const newSellPrice = Number(fruitForm.sellPrice) || 0;
     const cleanName = fruitForm.name.trim();
     const cleanUnit = (fruitForm.unit || 'kg').trim();
+    const minStock = Number(fruitForm.minStock) || 1;
+
+    if (!cleanName) return showToast('Nama buah wajib diisi.');
+    const dup = fruits.find(
+      (f) => f.id !== id && nrm(f.name) === nrm(cleanName) && nrm(f.unit) === nrm(cleanUnit)
+    );
+    if (dup) return showToast(`Buah "${cleanName}" (${cleanUnit}) sudah ada di Stok.`);
 
     if (fruitForm.id) {
       const oldFruit = fruits.find((f) => f.id === fruitForm.id);
@@ -646,7 +760,7 @@ export default function App() {
       const diffVal = Number((newVal - oldVal).toFixed(2));
 
       if (Math.abs(diffVal) >= 1) {
-        const tId = 'rev_' + Date.now();
+        const tId = uid('rev');
         batch.set(storeDoc('transactions', tId), {
           id: tId,
           type: 'revaluation',
@@ -656,9 +770,20 @@ export default function App() {
           createdAt: Date.now()
         });
       }
+
+      // Nama / satuan / harga berubah -> order berjalan & katalog bundling ikut terupdate
+      const changed =
+        oldFruit &&
+        (oldFruit.name !== cleanName ||
+          oldFruit.unit !== cleanUnit ||
+          Number(oldFruit.buyPrice || 0) !== newBuyPrice ||
+          Number(oldFruit.sellPrice || 0) !== newSellPrice);
+      if (changed) {
+        syncFruitRefs(batch, [{ id, name: cleanName, unit: cleanUnit, buyPrice: newBuyPrice, sellPrice: newSellPrice }]);
+      }
     } else if (newStock > 0 && newBuyPrice > 0) {
       const initVal = newStock * newBuyPrice;
-      const tId = 'init_' + Date.now();
+      const tId = uid('init');
       if (fruitForm.stockSource === 'cash') {
         batch.set(storeDoc('transactions', tId), {
           id: tId,
@@ -666,6 +791,7 @@ export default function App() {
           paymentMethod: 'cash',
           date: getTodayDateStr(),
           desc: `Stok Awal (Kas Toko): ${cleanName} (${newStock} ${cleanUnit})`,
+          boughtItems: [{ fruitId: id, fruitName: cleanName, qty: newStock, unit: cleanUnit, buyPrice: newBuyPrice }],
           amount: initVal,
           createdAt: Date.now()
         });
@@ -674,6 +800,7 @@ export default function App() {
           id: tId,
           type: 'capital',
           paymentMethod: 'inventory',
+          fruitId: id,
           date: getTodayDateStr(),
           desc: `Modal Awal Persediaan: ${cleanName} (${newStock} ${cleanUnit})`,
           amount: initVal,
@@ -689,32 +816,44 @@ export default function App() {
       stock: newStock,
       buyPrice: newBuyPrice,
       sellPrice: newSellPrice,
-      minStock: Number(fruitForm.minStock) || 1
+      minStock
     });
 
     await batch.commit();
     setFruitModalOpen(false);
-    showToast(fruitForm.id ? 'Data buah diperbarui!' : 'Buah baru ditambahkan & Neraca tercatat!');
+    showToast(fruitForm.id ? 'Data buah diperbarui & order/paket terkait ikut disinkronkan!' : 'Buah baru ditambahkan & Neraca tercatat!');
   };
 
   const deleteFruit = async (fruitId) => {
     if (!user) return;
     const target = fruits.find((f) => f.id === fruitId);
+    if (!target) return;
+
+    const usedInOrder = orders.find(
+      (o) => o.status !== 'completed' && (o.items || []).some((it) => it.fruitId === fruitId)
+    );
+    if (usedInOrder) {
+      return showToast(`${target.name} masih dipakai di order "${usedInOrder.customer}". Selesaikan/hapus order itu dulu.`);
+    }
+    const usedInBundle = bundles.find((b) => (b.items || []).some((it) => it.fruitId === fruitId));
+    if (usedInBundle) {
+      return showToast(`${target.name} masih dipakai di paket "${usedInBundle.name}". Ubah/hapus paket itu dulu.`);
+    }
+    if (!window.confirm(`Hapus ${target.name}? Sisa stok akan dicatat sebagai kerugian stok.`)) return;
+
     const batch = writeBatch(db);
-    if (target) {
-      const remVal = Number(target.stock || 0) * Number(target.buyPrice || 0);
-      if (remVal > 0) {
-        const tId = 'del_' + Date.now();
-        batch.set(storeDoc('transactions', tId), {
-          id: tId,
-          type: 'stock_out',
-          reason: 'Hapus Item Stok',
-          date: getTodayDateStr(),
-          desc: `Hapus Item Buah: ${target.name} (${target.stock} ${target.unit})`,
-          amount: remVal,
-          createdAt: Date.now()
-        });
-      }
+    const remVal = Number(target.stock || 0) * Number(target.buyPrice || 0);
+    if (remVal > 0) {
+      const tId = uid('del');
+      batch.set(storeDoc('transactions', tId), {
+        id: tId,
+        type: 'stock_out',
+        reason: 'Hapus Item Stok',
+        date: getTodayDateStr(),
+        desc: `Hapus Item Buah: ${target.name} (${target.stock} ${target.unit})`,
+        amount: remVal,
+        createdAt: Date.now()
+      });
     }
     batch.delete(storeDoc('fruits', fruitId));
     await batch.commit();
@@ -766,7 +905,7 @@ export default function App() {
   const saveBundleCatalogForm = async (e) => {
     e.preventDefault();
     if (!user || bundleCatalogForm.items.length === 0) return;
-    const id = bundleCatalogForm.id || 'bnd_' + Date.now();
+    const id = bundleCatalogForm.id || uid('bnd');
     const normalizedItems = bundleCatalogForm.items.map((it) => {
       const liveFruit = fruits.find((f) => f.id === it.fruitId);
       return {
@@ -785,7 +924,7 @@ export default function App() {
       sellPrice: Number(bundleCatalogForm.sellPrice) || 0,
       desc: bundleCatalogForm.desc.trim(),
       items: normalizedItems,
-      createdAt: Date.now()
+      createdAt: (bundles.find((b) => b.id === id) || {}).createdAt || Date.now()
     });
     setBundleCatalogModalOpen(false);
     showToast(bundleCatalogForm.id ? 'Paket bundling diperbarui!' : 'Produk bundling baru disimpan!');
@@ -793,6 +932,7 @@ export default function App() {
 
   const deleteBundleCatalog = async (bundleId) => {
     if (!user) return;
+    if (!window.confirm('Hapus produk bundling ini? (Order yang sudah dibuat tidak terpengaruh)')) return;
     await deleteDoc(storeDoc('bundles', bundleId));
     showToast('Produk bundling dihapus.');
   };
@@ -830,7 +970,7 @@ export default function App() {
       stock: Math.max(0, Number((Number(fruit.stock) - qty).toFixed(3)))
     });
 
-    const tId = 'out_' + Date.now();
+    const tId = uid('out');
     batch.set(storeDoc('transactions', tId), {
       id: tId,
       type: 'stock_out',
@@ -872,107 +1012,126 @@ export default function App() {
     e.preventDefault();
     if (!user || bulkRows.length === 0) return;
     const batch = writeBatch(db);
+    const work = {}; // fruitId -> state kerja (mencegah update ganda untuk buah yang sama)
+    const newKeyToId = {};
     let grandTotal = 0;
     let newFruitsCreated = 0;
     const summaryNames = [];
     const boughtItems = [];
+    const revals = [];
 
-    bulkRows.forEach((r, idx) => {
+    const getState = (f) => {
+      if (!work[f.id]) {
+        work[f.id] = {
+          fruit: f,
+          stock: Number(f.stock || 0),
+          buyPrice: Number(f.buyPrice || 0),
+          sellPrice: Number(f.sellPrice || 0),
+          isNew: false
+        };
+      }
+      return work[f.id];
+    };
+
+    bulkRows.forEach((r) => {
       const qty = Number(r.qty) || 0;
       const buyPrice = Number(r.buyPrice) || 0;
       if (qty <= 0) return;
-      grandTotal += qty * buyPrice;
 
+      let state = null;
       if (r.fruitId === 'NEW') {
         const cleanName = (r.customName || '').trim();
         const cleanUnit = (r.unit || 'kg').trim();
         if (!cleanName) return;
-
-        const existing = fruits.find(
-          (f) =>
-            f.name.trim().toLowerCase() === cleanName.toLowerCase() &&
-            (f.unit || '').trim().toLowerCase() === cleanUnit.toLowerCase()
-        );
-        const sellPrice =
-          r.sellPrice !== '' && Number(r.sellPrice) > 0 ? Number(r.sellPrice) : Math.round(buyPrice * 1.25);
-
+        const key = `${nrm(cleanName)}|${nrm(cleanUnit)}`;
+        const existing = fruits.find((f) => nrm(f.name) === nrm(cleanName) && nrm(f.unit) === nrm(cleanUnit));
         if (existing) {
-          const oldVal = Number(existing.stock || 0) * Number(existing.buyPrice || 0);
-          const effectiveBuy = buyPrice > 0 ? buyPrice : Number(existing.buyPrice || 0);
-          const newTotalStock = Number((Number(existing.stock) + qty).toFixed(3));
-          const expectedVal = oldVal + qty * buyPrice;
-          const actualVal = newTotalStock * effectiveBuy;
-          const revalDiff = Number((actualVal - expectedVal).toFixed(2));
-
-          if (Math.abs(revalDiff) >= 1) {
-            const revId = 'rev_' + Date.now() + '_' + idx;
-            batch.set(storeDoc('transactions', revId), {
-              id: revId,
-              type: 'revaluation',
-              date: bulkDate || getTodayDateStr(),
-              desc: `Penyesuaian Harga Modal: ${existing.name}`,
-              amount: revalDiff,
-              createdAt: Date.now()
-            });
-          }
-
-          batch.update(storeDoc('fruits', existing.id), {
-            stock: newTotalStock,
-            ...(buyPrice > 0 ? { buyPrice } : {}),
-            ...(r.sellPrice !== '' && Number(r.sellPrice) > 0 ? { sellPrice: Number(r.sellPrice) } : {})
-          });
-          summaryNames.push(`${existing.name} (${qty} ${existing.unit})`);
-          boughtItems.push({ fruitId: existing.id, fruitName: existing.name, qty, unit: existing.unit, buyPrice });
+          state = getState(existing);
+        } else if (newKeyToId[key]) {
+          state = work[newKeyToId[key]];
         } else {
-          const newId = 'f_' + Date.now() + '_' + idx;
-          batch.set(storeDoc('fruits', newId), {
-            id: newId,
-            name: cleanName,
-            unit: cleanUnit,
+          const newId = uid('f');
+          const sellPrice =
+            r.sellPrice !== '' && Number(r.sellPrice) > 0 ? Number(r.sellPrice) : Math.round(buyPrice * 1.25);
+          work[newId] = {
+            fruit: { id: newId, name: cleanName, unit: cleanUnit },
+            stock: 0,
             buyPrice,
             sellPrice,
-            stock: qty,
-            minStock: 1
-          });
+            isNew: true
+          };
+          newKeyToId[key] = newId;
           newFruitsCreated++;
-          summaryNames.push(`${cleanName} (${qty} ${cleanUnit})`);
-          boughtItems.push({ fruitId: newId, fruitName: cleanName, qty, unit: cleanUnit, buyPrice });
+          state = work[newId];
         }
       } else {
         const found = fruits.find((f) => f.id === r.fruitId);
-        if (found) {
-          const oldVal = Number(found.stock || 0) * Number(found.buyPrice || 0);
-          const effectiveBuy = buyPrice > 0 ? buyPrice : Number(found.buyPrice || 0);
-          const newTotalStock = Number((Number(found.stock) + qty).toFixed(3));
-          const expectedVal = oldVal + qty * buyPrice;
-          const actualVal = newTotalStock * effectiveBuy;
-          const revalDiff = Number((actualVal - expectedVal).toFixed(2));
-
-          if (Math.abs(revalDiff) >= 1) {
-            const revId = 'rev_' + Date.now() + '_' + idx;
-            batch.set(storeDoc('transactions', revId), {
-              id: revId,
-              type: 'revaluation',
-              date: bulkDate || getTodayDateStr(),
-              desc: `Penyesuaian Harga Modal: ${found.name}`,
-              amount: revalDiff,
-              createdAt: Date.now()
-            });
-          }
-
-          batch.update(storeDoc('fruits', found.id), {
-            stock: newTotalStock,
-            ...(buyPrice > 0 ? { buyPrice } : {}),
-            ...(r.sellPrice !== '' && Number(r.sellPrice) > 0 ? { sellPrice: Number(r.sellPrice) } : {})
-          });
-          summaryNames.push(`${found.name} (${qty} ${found.unit})`);
-          boughtItems.push({ fruitId: found.id, fruitName: found.name, qty, unit: found.unit, buyPrice });
-        }
+        if (!found) return;
+        state = getState(found);
       }
+
+      grandTotal += qty * buyPrice;
+      const oldVal = state.stock * state.buyPrice;
+      const effectiveBuy = buyPrice > 0 ? buyPrice : state.buyPrice;
+      const newTotalStock = r3(state.stock + qty);
+      const expectedVal = oldVal + qty * buyPrice;
+      const actualVal = newTotalStock * effectiveBuy;
+      const revalDiff = Number((actualVal - expectedVal).toFixed(2));
+      if (Math.abs(revalDiff) >= 1) revals.push({ name: state.fruit.name, diff: revalDiff });
+
+      state.stock = newTotalStock;
+      state.buyPrice = effectiveBuy;
+      if (r.sellPrice !== '' && Number(r.sellPrice) > 0) state.sellPrice = Number(r.sellPrice);
+      summaryNames.push(`${state.fruit.name} (${qty} ${state.fruit.unit})`);
+      boughtItems.push({ fruitId: state.fruit.id, fruitName: state.fruit.name, qty, unit: state.fruit.unit, buyPrice });
+    });
+
+    if (boughtItems.length === 0) return showToast('Isi minimal satu baris belanja dengan jumlah lebih dari 0.');
+
+    const touchedExisting = [];
+    Object.values(work).forEach((st) => {
+      if (st.isNew) {
+        batch.set(storeDoc('fruits', st.fruit.id), {
+          id: st.fruit.id,
+          name: st.fruit.name,
+          unit: st.fruit.unit,
+          buyPrice: st.buyPrice,
+          sellPrice: st.sellPrice,
+          stock: st.stock,
+          minStock: 1
+        });
+      } else {
+        batch.update(storeDoc('fruits', st.fruit.id), {
+          stock: st.stock,
+          buyPrice: st.buyPrice,
+          sellPrice: st.sellPrice
+        });
+        touchedExisting.push({
+          id: st.fruit.id,
+          name: st.fruit.name,
+          unit: st.fruit.unit,
+          buyPrice: st.buyPrice,
+          sellPrice: st.sellPrice
+        });
+      }
+    });
+    // Harga modal/jual berubah -> order berjalan & katalog bundling ikut terupdate
+    if (touchedExisting.length > 0) syncFruitRefs(batch, touchedExisting);
+
+    revals.forEach((rv) => {
+      const revId = uid('rev');
+      batch.set(storeDoc('transactions', revId), {
+        id: revId,
+        type: 'revaluation',
+        date: bulkDate || getTodayDateStr(),
+        desc: `Penyesuaian Harga Modal: ${rv.name}`,
+        amount: rv.diff,
+        createdAt: Date.now()
+      });
     });
 
     if (grandTotal > 0) {
-      const tId = 't_' + Date.now();
+      const tId = uid('t');
       batch.set(storeDoc('transactions', tId), {
         id: tId,
         type: 'inventory_buy',
@@ -1021,6 +1180,7 @@ export default function App() {
     setOrderStatus('confirmed');
     setOrderCustomSell('');
     setOrderNotes('');
+    setEditingOrderId('');
     setOrderSheetOpen(true);
   };
 
@@ -1056,9 +1216,53 @@ export default function App() {
     }
   }, [orderMode, singleOrderItems, activeSelectedBundle, bundleOrderQty, orderCustomSell, fruits]);
 
+  const openEditOrder = (o) => {
+    if (o.status === 'completed') {
+      return showToast('Order sudah selesai. Tekan "Batalkan Selesai" dulu jika ingin mengedit.');
+    }
+    const autoSummary = (items) => (items || []).map((i) => `${i.fruitName} ${i.qty} ${i.unit}`).join(', ');
+    setEditingOrderId(o.id);
+    setOrderCustomer(o.customer || '');
+    setOrderStatus(o.status === 'request' ? 'request' : 'confirmed');
+
+    const bundle = o.orderType === 'bundle' ? bundles.find((b) => b.name === o.bundleName) : null;
+    if (bundle) {
+      const mult = Number(o.bundleQty) || 1;
+      const label = `${o.bundleName} (${mult} paket)`;
+      let userNotes = o.notes || '';
+      if (userNotes === label) userNotes = '';
+      else if (userNotes.startsWith(label + ' • ')) userNotes = userNotes.slice((label + ' • ').length);
+      setOrderMode('bundle');
+      setSelectedBundleId(bundle.id);
+      setBundleOrderQty(mult);
+      setOrderNotes(userNotes);
+      setSingleOrderItems([]);
+      setOrderCustomSell(Number(o.totalSell) === Number(bundle.sellPrice || 0) * mult ? '' : String(o.totalSell ?? ''));
+    } else {
+      const items = (o.items || []).map((it) => ({ ...it }));
+      const baseSell = items.reduce((s, it) => s + Number(it.qty || 0) * Number(it.sellPrice || 0), 0);
+      setOrderMode('single');
+      setSingleOrderItems(items);
+      setSelectedBundleId(bundles[0] ? bundles[0].id : '');
+      setBundleOrderQty(1);
+      setOrderNotes(o.notes === autoSummary(items) ? '' : o.notes || '');
+      setOrderCustomSell(Number(o.totalSell) === baseSell ? '' : String(o.totalSell ?? ''));
+    }
+    setOrderSheetOpen(true);
+  };
+
   const saveOrderSheet = async (e) => {
     e.preventDefault();
     if (!user) return;
+
+    const editing = editingOrderId ? orders.find((x) => x.id === editingOrderId) : null;
+    if (editingOrderId && (!editing || editing.status === 'completed')) {
+      setOrderSheetOpen(false);
+      setEditingOrderId('');
+      return showToast('Order sudah selesai/tidak ditemukan. Batalkan selesai dulu untuk mengedit.');
+    }
+    const id = editing ? editing.id : uid('o');
+    const createdAt = editing ? editing.createdAt || Date.now() : Date.now();
 
     if (orderMode === 'single') {
       if (singleOrderItems.length === 0) return;
@@ -1066,7 +1270,7 @@ export default function App() {
         ...it,
         qty: Number(Number(it.qty).toFixed(3))
       }));
-      const id = 'o_' + Date.now();
+      if (items.some((it) => !(Number(it.qty) > 0))) return showToast('Jumlah buah harus lebih dari 0.');
       await setDoc(storeDoc('orders', id), {
         id,
         orderType: 'single',
@@ -1077,7 +1281,7 @@ export default function App() {
         items,
         totalCost: orderCalc.totalCost,
         totalSell: orderCalc.finalSell,
-        createdAt: Date.now()
+        createdAt
       });
     } else {
       if (!activeSelectedBundle) return showToast('Pilih paket bundling terlebih dahulu.');
@@ -1094,7 +1298,6 @@ export default function App() {
         };
       });
       const bundleLabel = `${activeSelectedBundle.name} (${mult} paket)`;
-      const id = 'o_' + Date.now();
       await setDoc(storeDoc('orders', id), {
         id,
         orderType: 'bundle',
@@ -1107,12 +1310,13 @@ export default function App() {
         items: expandedItems,
         totalCost: orderCalc.totalCost,
         totalSell: orderCalc.finalSell,
-        createdAt: Date.now()
+        createdAt
       });
     }
 
     setOrderSheetOpen(false);
-    showToast('Order baru berhasil dicatat!');
+    setEditingOrderId('');
+    showToast(editing ? 'Order diperbarui!' : 'Order baru berhasil dicatat!');
   };
 
   const copyOrderPaymentWA = (o) => {
@@ -1146,22 +1350,40 @@ ${banksText}`,
 
   const confirmCompleteOrder = async (payStatus) => {
     if (!user || !completeOrderTarget) return;
-    const o = completeOrderTarget;
+    const o = orders.find((x) => x.id === completeOrderTarget.id) || completeOrderTarget;
+    if (o.status === 'completed') {
+      setCompleteOrderTarget(null);
+      return showToast('Order ini sudah selesai sebelumnya.');
+    }
+
+    // Gabungkan per buah, pastikan buah ada & stok cukup (stok tidak boleh dipotong diam-diam)
+    const { map, missing } = aggregateItems(o.items);
+    if (missing.length > 0) {
+      return showToast(`Buah tidak ada di Stok: ${missing.join(', ')}. Tambahkan dulu di menu Stok.`);
+    }
+    const short = Object.values(map).filter(({ fruit, qty }) => qty > Number(fruit.stock || 0) + 0.0005);
+    if (short.length > 0) {
+      return showToast(
+        'Stok kurang: ' +
+          short.map(({ fruit, qty }) => `${fruit.name} butuh ${qty}, ada ${fruit.stock} ${fruit.unit}`).join('; ') +
+          '. Belanja stok dulu.'
+      );
+    }
+
     const batch = writeBatch(db);
 
-    // Hitung HPP aktual berdasarkan harga modal buah terkini agar selisih stok & HPP selalu 100% klop
+    // HPP aktual dari harga modal terkini agar selisih stok & HPP selalu klop
     let actualTotalCost = 0;
-    (o.items || []).forEach((it) => {
-      const f =
-        fruits.find((item) => item.id === it.fruitId) ||
-        fruits.find((item) => item.name.trim().toLowerCase() === it.fruitName.trim().toLowerCase());
-      const unitBuy = f ? Number(f.buyPrice || 0) : Number(it.buyPrice || 0);
-      actualTotalCost += Number(it.qty || 0) * unitBuy;
-      if (f) {
-        batch.update(storeDoc('fruits', f.id), {
-          stock: Math.max(0, Number((Number(f.stock) - Number(it.qty)).toFixed(3)))
-        });
-      }
+    const deductions = [];
+    Object.values(map).forEach(({ fruit, qty }) => {
+      actualTotalCost += qty * Number(fruit.buyPrice || 0);
+      deductions.push({ fruitId: fruit.id, qty, cost: qty * Number(fruit.buyPrice || 0) });
+      batch.update(storeDoc('fruits', fruit.id), { stock: r3(Number(fruit.stock || 0) - qty) });
+    });
+
+    const saleItems = (o.items || []).map((it) => {
+      const f = findFruitForItem(it);
+      return f ? { ...it, fruitId: f.id, buyPrice: Number(f.buyPrice || 0) } : it;
     });
 
     const methodObj = payStatus === 'paid' ? { paymentMethod: completePayMethod, paidDate: completeDate } : {};
@@ -1171,6 +1393,7 @@ ${banksText}`,
       paymentStatus: payStatus,
       completedDate: completeDate,
       totalCost: actualTotalCost,
+      items: saleItems,
       ...methodObj
     });
 
@@ -1184,7 +1407,8 @@ ${banksText}`,
       ...methodObj,
       customer: o.customer,
       notes: o.notes,
-      items: o.items || [],
+      items: saleItems,
+      deductions,
       desc: `Penjualan: ${o.customer} (${o.notes})`,
       amount: Number(o.totalSell),
       costAmount: actualTotalCost,
@@ -1200,14 +1424,41 @@ ${banksText}`,
     );
   };
 
+  const cancelOrderCompletion = async (o) => {
+    if (!user || !o) return;
+    if (
+      !window.confirm(
+        `Batalkan penyelesaian order "${o.customer}"? Stok dikembalikan, catatan penjualan/kas dihapus, dan order kembali ke daftar pesanan.`
+      )
+    )
+      return;
+    const saleTrx = transactions.find((t) => t.orderId === o.id && t.type === 'sale') || null;
+    const batch = writeBatch(db);
+    buildRevertCompletion(batch, o, saleTrx, true);
+    await batch.commit();
+    showToast('Penyelesaian dibatalkan: stok kembali & penjualan dihapus.');
+  };
+
   const deleteOrder = async (orderId) => {
     if (!user) return;
+    const o = orders.find((x) => x.id === orderId);
+    if (!o) return;
+    const isDone = o.status === 'completed';
+    const msg = isDone
+      ? `Order "${o.customer}" sudah selesai. Menghapusnya akan mengembalikan stok dan menghapus catatan penjualan & kas terkait. Lanjutkan?`
+      : `Hapus order "${o.customer}"?`;
+    if (!window.confirm(msg)) return;
+
     const batch = writeBatch(db);
-    batch.delete(storeDoc('orders', orderId));
-    const linked = transactions.filter((t) => t.orderId === orderId);
-    linked.forEach((t) => batch.delete(storeDoc('transactions', t.id)));
+    if (isDone) {
+      const saleTrx = transactions.find((t) => t.orderId === o.id && t.type === 'sale') || null;
+      buildRevertCompletion(batch, o, saleTrx, false);
+    } else {
+      transactions.filter((t) => t.orderId === o.id).forEach((t) => batch.delete(storeDoc('transactions', t.id)));
+    }
+    batch.delete(storeDoc('orders', o.id));
     await batch.commit();
-    showToast('Order & catatan terkait dihapus.');
+    showToast(isDone ? 'Order dihapus, stok dikembalikan & keuangan disesuaikan.' : 'Order dihapus.');
   };
 
   // ==========================================================================
@@ -1229,6 +1480,25 @@ ${banksText}`,
         paymentMethod: method,
         paidDate: todayStr
       });
+    } else {
+      // Data lama: order selesai tapi catatan penjualannya hilang -> dibuat ulang agar kas & laba tercatat
+      const saleId = 'sale_' + o.id;
+      batch.set(storeDoc('transactions', saleId), {
+        id: saleId,
+        orderId: o.id,
+        type: 'sale',
+        paymentStatus: 'paid',
+        paymentMethod: method,
+        paidDate: todayStr,
+        date: o.completedDate || todayStr,
+        customer: o.customer,
+        notes: o.notes,
+        items: o.items || [],
+        desc: `Penjualan: ${o.customer} (${o.notes})`,
+        amount: Number(o.totalSell),
+        costAmount: Number(o.totalCost || 0),
+        createdAt: Date.now()
+      });
     }
     await batch.commit();
     showToast(`Piutang ${o.customer} Lunas via ${method === 'cash' ? 'Cash' : 'Transfer'}!`);
@@ -1237,7 +1507,7 @@ ${banksText}`,
   const saveBankForm = async (e) => {
     e.preventDefault();
     if (!user) return;
-    const id = 'b_' + Date.now();
+    const id = uid('b');
     await setDoc(storeDoc('bankAccounts', id), {
       id,
       bank: bankForm.bank.trim(),
@@ -1263,33 +1533,76 @@ ${banksText}`,
 
   const handleDeleteTransaction = async (t) => {
     if (!user) return;
-    const batch = writeBatch(db);
-    batch.delete(storeDoc('transactions', t.id));
 
-    if (t.type === 'sale' && t.orderId) {
-      batch.update(storeDoc('orders', t.orderId), { paymentStatus: 'unpaid' });
+    // --- Penjualan: batalkan penyelesaian order (stok kembali) ---
+    if (t.type === 'sale') {
+      if (
+        !window.confirm(
+          'Menghapus catatan penjualan akan membatalkan penyelesaian order: stok dikembalikan dan order kembali ke Daftar Pesanan. Lanjutkan?'
+        )
+      )
+        return;
+      const o = t.orderId ? orders.find((x) => x.id === t.orderId) : null;
+      const batch = writeBatch(db);
+      buildRevertCompletion(batch, o || null, t, !!o);
       await batch.commit();
-      showToast('Penjualan dihapus & order dikembalikan ke Tab Piutang.');
+      showToast('Penjualan dibatalkan: stok dikembalikan & order kembali ke Daftar Pesanan.');
       return;
     }
 
+    // --- Penyesuaian nilai: dibuat sistem untuk menjaga neraca ---
+    if (t.type === 'revaluation') {
+      return showToast('Penyesuaian nilai dibuat otomatis oleh sistem untuk menjaga neraca, jadi tidak bisa dihapus manual.');
+    }
+
+    // --- Modal barang non-tunai: terikat nilai stok ---
+    if (t.type === 'capital' && t.paymentMethod === 'inventory') {
+      return showToast('Modal barang terikat dengan nilai stok. Ubah lewat Edit Buah atau Out Stok.');
+    }
+
+    if (!window.confirm('Hapus transaksi ini? Stok & saldo akan disesuaikan otomatis.')) return;
+    const batch = writeBatch(db);
+
+    // --- Belanja stok: kurangi kembali stok yang tadinya ditambah ---
     if (t.type === 'inventory_buy') {
       if (t.boughtItems && t.boughtItems.length > 0) {
-        t.boughtItems.forEach((it) => {
-          const f =
-            fruits.find((item) => item.id === it.fruitId) ||
-            fruits.find((item) => item.name.trim().toLowerCase() === (it.fruitName || '').trim().toLowerCase());
-          if (f) {
-            batch.update(storeDoc('fruits', f.id), {
-              stock: Math.max(0, Number((Number(f.stock || 0) - Number(it.qty || 0)).toFixed(3)))
-            });
-          }
+        const { map, missing } = aggregateItems(t.boughtItems);
+        if (missing.length > 0) {
+          return showToast(`Buah (${missing.join(', ')}) sudah dihapus dari Stok, belanja ini tidak bisa dibatalkan.`);
+        }
+        const short = Object.values(map).filter(({ fruit, qty }) => qty > Number(fruit.stock || 0) + 0.0005);
+        if (short.length > 0) {
+          return showToast(
+            'Stok sudah terpakai/terjual: ' +
+              short.map(({ fruit, qty }) => `${fruit.name} tersisa ${fruit.stock}, belanja ini ${qty}`).join('; ') +
+              '. Koreksi dulu lewat Out Stok.'
+          );
+        }
+        let removedValue = 0;
+        Object.values(map).forEach(({ fruit, qty }) => {
+          removedValue += qty * Number(fruit.buyPrice || 0);
+          batch.update(storeDoc('fruits', fruit.id), { stock: r3(Number(fruit.stock || 0) - qty) });
         });
+        // Kas kembali sebesar nominal belanja, persediaan turun sebesar nilai stok -> selisih (jika ada) dijurnal
+        const revalDiff = Number((Number(t.amount || 0) - removedValue).toFixed(2));
+        if (Math.abs(revalDiff) >= 1) {
+          const revId = uid('rev');
+          batch.set(storeDoc('transactions', revId), {
+            id: revId,
+            type: 'revaluation',
+            date: getTodayDateStr(),
+            desc: `Penyesuaian Pembatalan Belanja: ${t.desc || ''}`.slice(0, 120),
+            amount: revalDiff,
+            createdAt: Date.now()
+          });
+        }
+        batch.delete(storeDoc('transactions', t.id));
         await batch.commit();
         showToast('Belanja dihapus & stok buah otomatis dikurangi kembali!');
       } else {
-        // Transaksi belanja lama tanpa rincian item: konversi nilai barangnya ke Modal Awal Barang agar Neraca tetap seimbang
-        const syncId = 'conv_cap_' + Date.now();
+        // Belanja lama tanpa rincian item: nilai barangnya dikonversi ke Modal Awal Barang agar Neraca tetap seimbang
+        const syncId = uid('conv_cap');
+        batch.delete(storeDoc('transactions', t.id));
         batch.set(storeDoc('transactions', syncId), {
           id: syncId,
           type: 'capital',
@@ -1305,18 +1618,37 @@ ${banksText}`,
       return;
     }
 
-    if (t.type === 'stock_out' && t.fruitId && Number(t.qty || 0) > 0) {
+    // --- Out stok: kembalikan stok ke buah ---
+    if (t.type === 'stock_out') {
+      if (!t.fruitId || !(Number(t.qty || 0) > 0)) {
+        return showToast('Catatan ini dibuat otomatis saat buah dihapus dan tidak bisa dihapus manual.');
+      }
       const f = fruits.find((item) => item.id === t.fruitId);
-      if (f) {
-        batch.update(storeDoc('fruits', f.id), {
-          stock: Number((Number(f.stock || 0) + Number(t.qty || 0)).toFixed(3))
+      if (!f) return showToast('Buah ini sudah dihapus dari Stok, jadi stoknya tidak bisa dikembalikan.');
+      const qty = Number(t.qty || 0);
+      const restoredValue = qty * Number(f.buyPrice || 0);
+      batch.update(storeDoc('fruits', f.id), { stock: r3(Number(f.stock || 0) + qty) });
+      // Kerugian dihapus (+amount ke laba), persediaan naik (+nilai stok sekarang) -> selisih dijurnal
+      const revalDiff = Number((restoredValue - Number(t.amount || 0)).toFixed(2));
+      if (Math.abs(revalDiff) >= 1) {
+        const revId = uid('rev');
+        batch.set(storeDoc('transactions', revId), {
+          id: revId,
+          type: 'revaluation',
+          date: getTodayDateStr(),
+          desc: `Penyesuaian Pembatalan Out Stok: ${f.name}`,
+          amount: revalDiff,
+          createdAt: Date.now()
         });
       }
+      batch.delete(storeDoc('transactions', t.id));
       await batch.commit();
       showToast('Riwayat Out Stok dihapus & stok buah dikembalikan!');
       return;
     }
 
+    // --- Biaya operasional / setoran modal tunai ---
+    batch.delete(storeDoc('transactions', t.id));
     await batch.commit();
     showToast('Transaksi berhasil dihapus!');
   };
@@ -1324,24 +1656,49 @@ ${banksText}`,
   const saveFinanceForm = async (e) => {
     e.preventDefault();
     if (!user) return;
+    const date = financeForm.date || getTodayDateStr();
+
     if (financeForm.id) {
-      await updateDoc(storeDoc('transactions', financeForm.id), {
-        type: financeForm.type,
-        paymentMethod: financeForm.payMethod || 'cash',
-        date: financeForm.date || getTodayDateStr(),
-        ...(financeForm.type === 'sale' ? { paidDate: financeForm.date || getTodayDateStr() } : {}),
+      const orig = transactions.find((x) => x.id === financeForm.id);
+      if (!orig) return showToast('Transaksi tidak ditemukan.');
+      const type = orig.type; // jenis transaksi tidak boleh diubah agar stok & neraca tetap konsisten
+      const lockAmount = type === 'inventory_buy' || (type === 'capital' && orig.paymentMethod === 'inventory');
+      const amount = lockAmount ? Number(orig.amount || 0) : Number(financeForm.amount) || 0;
+      const batch = writeBatch(db);
+
+      const patch = {
+        date,
         desc: financeForm.desc.trim(),
-        amount: Number(financeForm.amount) || 0
-      });
+        amount
+      };
+      if (orig.paymentMethod !== 'inventory') patch.paymentMethod = financeForm.payMethod || 'cash';
+
+      if (type === 'sale') {
+        if (orig.paymentStatus === 'paid') patch.paidDate = date;
+        batch.update(storeDoc('transactions', orig.id), patch);
+        if (orig.orderId && orders.some((o) => o.id === orig.orderId)) {
+          // Nominal/tanggal/metode penjualan ikut mengubah order terkait
+          batch.update(storeDoc('orders', orig.orderId), {
+            totalSell: amount,
+            completedDate: date,
+            ...(orig.paymentStatus === 'paid' ? { paymentMethod: patch.paymentMethod, paidDate: date } : {})
+          });
+        }
+      } else {
+        batch.update(storeDoc('transactions', orig.id), patch);
+      }
+
+      await batch.commit();
       setFinanceModalOpen(false);
-      showToast('Transaksi berhasil diperbarui!');
+      showToast(lockAmount ? 'Transaksi diperbarui (nominal terkunci mengikuti stok).' : 'Transaksi berhasil diperbarui!');
     } else {
-      const id = 't_' + Date.now();
+      const type = financeForm.type === 'capital' ? 'capital' : 'opex';
+      const id = uid('t');
       await setDoc(storeDoc('transactions', id), {
         id,
-        type: financeForm.type,
-        paymentMethod: financeForm.payMethod || 'cash',
-        date: financeForm.date || getTodayDateStr(),
+        type,
+        paymentMethod: financeForm.payMethod === 'cash' ? 'cash' : 'transfer',
+        date,
         desc: financeForm.desc.trim(),
         amount: Number(financeForm.amount) || 0,
         createdAt: Date.now()
@@ -1354,7 +1711,7 @@ ${banksText}`,
   // Sinkronisasi Penyeimbang Neraca untuk data lama sebelum pembaruan ini
   const syncLegacyBalanceDiff = async (diffAmount) => {
     if (!user || Math.abs(diffAmount) < 1) return;
-    const id = 'sync_cap_' + Date.now();
+    const id = uid('sync_cap');
     await setDoc(storeDoc('transactions', id), {
       id,
       type: 'capital',
@@ -1407,7 +1764,8 @@ ${banksText}`,
   }, [transactions, financePeriods.pnl]);
 
   const balanceData = useMemo(() => {
-    const list = transactions.filter((t) => isDateInPeriod(t.date, financePeriods.balance));
+    // Neraca adalah posisi keseluruhan (nilai stok bersifat live), jadi selalu memakai semua transaksi
+    const list = transactions;
     const capIn = list.filter((t) => t.type === 'capital').reduce((s, t) => s + Number(t.amount || 0), 0);
     const capCashIn = list
       .filter((t) => t.type === 'capital' && t.paymentMethod !== 'inventory')
@@ -1451,7 +1809,7 @@ ${banksText}`,
       diff,
       isBalanced
     };
-  }, [transactions, financePeriods.balance, metrics.inventoryValue]);
+  }, [transactions, metrics.inventoryValue]);
 
   const cashflowData = useMemo(() => {
     let cfIn = 0;
@@ -1492,6 +1850,8 @@ ${banksText}`,
   );
 
   const activeThemeVars = FRESH_MODES[colorMode] || FRESH_MODES.light;
+  const financeAmountLocked =
+    !!financeForm.id && (financeForm.type === 'inventory_buy' || financeForm.payMethod === 'inventory');
 
   // ==========================================================================
   // 11. HALAMAN GERBANG LOGIN (JIKA BELUM LOGIN DENGAN EMAIL TERDAFTAR)
@@ -2102,9 +2462,21 @@ ${banksText}`,
                             <h3 className="text-sm font-extrabold mt-1">{o.customer}</h3>
                             <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">{o.notes}</p>
                           </div>
-                          <button onClick={() => deleteOrder(o.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
-                            Hapus
-                          </button>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {!isDone && (
+                              <button onClick={() => openEditOrder(o)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-2 py-1 rounded-lg text-[11px] font-bold">
+                                Edit
+                              </button>
+                            )}
+                            {isDone && (
+                              <button onClick={() => cancelOrderCompletion(o)} className="px-2 py-1 rounded-lg bg-amber-500/15 text-amber-500 text-[11px] font-bold">
+                                Batalkan Selesai
+                              </button>
+                            )}
+                            <button onClick={() => deleteOrder(o.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
+                              Hapus
+                            </button>
+                          </div>
                         </div>
 
                         <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl space-y-1 text-xs">
@@ -2321,7 +2693,8 @@ ${banksText}`,
                 ))}
               </div>
 
-              {/* Filter Periode */}
+              {/* Filter Periode (Neraca selalu posisi keseluruhan) */}
+              {financeSubTab !== 'balance' && (
               <div className="flex items-center gap-1.5 text-[11px] font-bold">
                 {[
                   { id: 'today', label: 'Hari Ini' },
@@ -2343,6 +2716,7 @@ ${banksText}`,
                   </button>
                 ))}
               </div>
+              )}
 
               {/* SUB-TAB 1: PENJUALAN & REKAPAN TERLARIS */}
               {financeSubTab === 'sales' && (
@@ -3224,8 +3598,8 @@ ${banksText}`,
           <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center">
             <div style={{ backgroundColor: 'var(--bg-card)' }} className="w-full max-w-[440px] max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl p-5 space-y-3.5">
               <div className="flex items-center justify-between">
-                <h3 className="font-extrabold text-base">Catat Order Pelanggan</h3>
-                <button onClick={() => setOrderSheetOpen(false)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
+                <h3 className="font-extrabold text-base">{editingOrderId ? 'Edit Order Pelanggan' : 'Catat Order Pelanggan'}</h3>
+                <button onClick={() => { setOrderSheetOpen(false); setEditingOrderId(''); }} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
               </div>
 
               <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="grid grid-cols-2 gap-1.5 p-1 rounded-xl text-xs font-bold">
@@ -3498,7 +3872,7 @@ ${banksText}`,
                   style={{ backgroundColor: 'var(--accent)' }}
                   className="w-full py-3 rounded-xl text-white font-extrabold disabled:opacity-50"
                 >
-                  Simpan Order
+                  {editingOrderId ? 'Simpan Perubahan Order' : 'Simpan Order'}
                 </button>
               </form>
             </div>
@@ -3585,27 +3959,31 @@ ${banksText}`,
                 <button onClick={() => setFinanceModalOpen(false)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
               </div>
               <form onSubmit={saveFinanceForm} className="space-y-3 text-xs">
-                {financeForm.type === 'sale' ? (
+                {financeForm.id ? (
                   <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-3 py-2.5 rounded-xl font-bold text-emerald-500">
-                    Jenis: Penerimaan Penjualan
+                    Jenis: {({ sale: 'Penerimaan Penjualan', opex: 'Biaya Operasional', capital: 'Setoran Modal', inventory_buy: 'Belanja Stok Buah (Persediaan)' })[financeForm.type] || financeForm.type}
                   </div>
                 ) : (
                   <select value={financeForm.type} onChange={(e) => setFinanceForm({ ...financeForm, type: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none font-semibold">
                     <option value="opex">Biaya Operasional (Plastik, Mika, Pita, Ongkir)</option>
-                    <option value="capital">Setoran Modal (Tunai / Barang)</option>
-                    <option value="inventory_buy">Belanja Stok Buah (Masuk Persediaan)</option>
+                    <option value="capital">Setoran Modal (Tunai)</option>
                   </select>
                 )}
                 <div className="grid grid-cols-2 gap-2">
                   <input type="date" required value={financeForm.date} onChange={(e) => setFinanceForm({ ...financeForm, date: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
-                  <select value={financeForm.payMethod} onChange={(e) => setFinanceForm({ ...financeForm, payMethod: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl font-bold outline-none">
+                  <select disabled={financeForm.payMethod === 'inventory'} value={financeForm.payMethod} onChange={(e) => setFinanceForm({ ...financeForm, payMethod: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl font-bold outline-none">
                     <option value="transfer">Transfer</option>
                     <option value="cash">Cash (Tunai)</option>
-                    {financeForm.type === 'capital' && <option value="inventory">Modal Barang (Non-Tunai)</option>}
+                    {financeForm.payMethod === 'inventory' && <option value="inventory">Modal Barang (Non-Tunai)</option>}
                   </select>
                 </div>
                 <input required placeholder="Keterangan" value={financeForm.desc} onChange={(e) => setFinanceForm({ ...financeForm, desc: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
-                <input type="number" required placeholder="Nominal (Rp)" value={financeForm.amount} onChange={(e) => setFinanceForm({ ...financeForm, amount: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
+                <input type="number" required readOnly={financeAmountLocked} placeholder="Nominal (Rp)" value={financeForm.amount} onChange={(e) => setFinanceForm({ ...financeForm, amount: e.target.value })} style={{ backgroundColor: 'var(--bg-card-sub)', opacity: financeAmountLocked ? 0.6 : 1 }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
+                {financeAmountLocked && (
+                  <p style={{ color: 'var(--text-muted)' }} className="text-[10px] -mt-1.5">
+                    Nominal terkunci karena terhubung ke stok. Untuk mengubah jumlah/harga, edit lewat menu Stok (Edit Buah, Belanja, atau Out Stok).
+                  </p>
+                )}
                 <button type="submit" style={{ backgroundColor: 'var(--accent)' }} className="w-full py-3 rounded-xl text-white font-extrabold">
                   {financeForm.id ? 'Simpan Perubahan' : 'Simpan Transaksi'}
                 </button>
