@@ -2218,6 +2218,45 @@ ${banksText}`,
                 </div>
               </div>
 
+              {/* Rincian Nilai Persediaan per Buah */}
+              <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-4 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-extrabold">Rincian Nilai Persediaan</h2>
+                    <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Stok x harga modal, diurutkan dari nilai terbesar</p>
+                  </div>
+                  <strong className="text-xs font-extrabold text-emerald-500">{formatRp(metrics.inventoryValue)}</strong>
+                </div>
+                {(() => {
+                  const rows = fruits
+                    .filter((f) => Number(f.stock || 0) > 0)
+                    .map((f) => ({ f, val: Number(f.stock || 0) * Number(f.buyPrice || 0) }))
+                    .sort((a, b) => b.val - a.val);
+                  if (rows.length === 0) {
+                    return (
+                      <div style={{ backgroundColor: 'var(--bg-card-sub)', color: 'var(--text-muted)' }} className="p-3 rounded-xl text-center text-xs font-semibold">
+                        Belum ada stok buah.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="space-y-1.5">
+                      {rows.map(({ f, val }) => (
+                        <div key={f.id} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-3 py-2 rounded-xl flex items-center justify-between gap-2 text-xs">
+                          <div className="min-w-0">
+                            <strong className="block truncate font-extrabold">{f.name}</strong>
+                            <span style={{ color: 'var(--text-muted)' }} className="text-[10px]">
+                              {f.stock} {f.unit} x {formatRp(f.buyPrice)}
+                            </span>
+                          </div>
+                          <strong className="shrink-0 font-extrabold">{formatRp(val)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+
               {/* Shopping List */}
               <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2">
@@ -2526,6 +2565,8 @@ ${banksText}`,
                                 </div>
                                 <div style={{ color: 'var(--text-muted)' }} className="text-[11px] mt-0.5 flex items-center gap-1.5 flex-wrap">
                                   <span>Modal {formatRp(f.buyPrice)}</span>
+                                  <span>•</span>
+                                  <span>Nilai <b>{formatRp(Number(f.stock || 0) * Number(f.buyPrice || 0))}</b></span>
                                   <span>•</span>
                                   <span className="text-emerald-500 font-bold">Jual {formatRp(f.sellPrice)}/{f.unit}</span>
                                 </div>
