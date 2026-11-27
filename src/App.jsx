@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
@@ -356,6 +356,27 @@ export default function App() {
   // ==========================================================================
   // 4. FIREBASE AUTH WHITELIST (HANYA EMAIL TERDAFTAR YANG BISA MASUK)
   // ==========================================================================
+  // Kunci anti dobel-klik + penangkap error: satu aksi tulis pada satu waktu,
+  // supaya stok, kas, dan jurnal tidak tercatat ganda / tidak saling timpa.
+  const lockRef = useRef(false);
+  const guard = (fn) => async (...args) => {
+    const first = args[0];
+    if (first && typeof first.preventDefault === 'function') first.preventDefault();
+    if (lockRef.current) {
+      showToast('Masih memproses, tunggu sebentar...');
+      return;
+    }
+    lockRef.current = true;
+    try {
+      return await fn(...args);
+    } catch (err) {
+      console.error(err);
+      showToast('Gagal menyimpan: ' + (err && err.message ? err.message : err));
+    } finally {
+      lockRef.current = false;
+    }
+  };
+
   const isEmailAuthorized = (email) => {
     if (!email) return false;
     return ALLOWED_EMAILS.map((e) => e.trim().toLowerCase()).includes(email.trim().toLowerCase());
@@ -410,6 +431,7 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     const base = `artifacts/${APP_ID}/users/mfruits_store`;
+    const onErr = (err) => setDbError('Izin Firestore ditolak: ' + err.message);
 
     const unsubFruits = onSnapshot(
       collection(db, `${base}/fruits`),
@@ -424,23 +446,23 @@ export default function App() {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       setBundles(list);
-    });
+    }, onErr);
 
     const unsubOrders = onSnapshot(collection(db, `${base}/orders`), (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       setOrders(list);
-    });
+    }, onErr);
 
     const unsubBanks = onSnapshot(collection(db, `${base}/bankAccounts`), (snap) => {
       setBankAccounts(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
+    }, onErr);
 
     const unsubTrx = onSnapshot(collection(db, `${base}/transactions`), (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       setTransactions(list);
-    });
+    }, onErr);
 
     return () => {
       unsubFruits();
@@ -492,7 +514,14 @@ export default function App() {
       .forEach((o) => {
         const items = patchItems(o.items);
         const totalCost = items.reduce((s, it) => s + Number(it.qty || 0) * Number(it.buyPrice || 0), 0);
-        batch.update(storeDoc('orders', o.id), { items, totalCost });
+        const patch = { items, totalCost };
+        // Order satuan tanpa harga custom: total jual ikut harga jual terbaru
+        if (o.orderType !== 'bundle') {
+          const oldBase = (o.items || []).reduce((s, it) => s + Number(it.qty || 0) * Number(it.sellPrice || 0), 0);
+          const newBase = items.reduce((s, it) => s + Number(it.qty || 0) * Number(it.sellPrice || 0), 0);
+          if (Math.abs(Number(o.totalSell || 0) - oldBase) < 1) patch.totalSell = newBase;
+        }
+        batch.update(storeDoc('orders', o.id), patch);
       });
     bundles
       .filter((b) => (b.items || []).some((it) => byId[it.fruitId]))
@@ -611,7 +640,7 @@ export default function App() {
   // ==========================================================================
   // 7. AKSI STOK, KATALOG BUNDLING, BELANJA & OUT STOCK
   // ==========================================================================
-  const adjustStock = async (fruitId, delta, recordPurchase) => {
+  const adjustStockRaw = async (fruitId, delta, recordPurchase) => {
     const f = fruits.find((item) => item.id === fruitId);
     if (!f || !user) return;
     const oldStock = Number(f.stock || 0);
@@ -656,13 +685,30 @@ export default function App() {
       });
       await batch.commit();
       showToast(`Stok ${f.name} sekarang ${newStock} ${f.unit}`);
+    } else if (!recordPurchase && actualDelta > 0) {
+      const capId = uid('addstock');
+      batch.set(storeDoc('transactions', capId), {
+        id: capId,
+        type: 'capital',
+        paymentMethod: 'inventory',
+        fruitId: f.id,
+        fruitName: f.name,
+        unit: f.unit,
+        qty: actualDelta,
+        date: getTodayDateStr(),
+        desc: `Tambahan Modal Barang (Stok Lama): ${f.name} (+${actualDelta} ${f.unit})`,
+        amount: Number((actualDelta * Number(f.buyPrice || 0)).toFixed(2)),
+        createdAt: Date.now()
+      });
+      await batch.commit();
+      showToast(`Stok ${f.name} sekarang ${newStock} ${f.unit}`);
     } else {
       await batch.commit();
       showToast(`Stok ${f.name} sekarang ${newStock} ${f.unit}`);
     }
   };
 
-  const buyAllShoppingItems = async () => {
+  const buyAllShoppingItemsRaw = async () => {
     if (!user || metrics.shoppingList.length === 0) return;
     const batch = writeBatch(db);
     let totalSpent = 0;
@@ -735,12 +781,12 @@ export default function App() {
   };
 
   // Simpan Buah + Jurnal Penyeimbang Otomatis agar Neraca selalu Seimbang
-  const saveFruitForm = async (e) => {
+  const saveFruitFormRaw = async (e) => {
     e.preventDefault();
     if (!user) return;
     const batch = writeBatch(db);
     const id = fruitForm.id || uid('f');
-    const newStock = Number(fruitForm.stock) || 0;
+    const newStock = Math.max(0, Number(fruitForm.stock) || 0);
     const newBuyPrice = Number(fruitForm.buyPrice) || 0;
     const newSellPrice = Number(fruitForm.sellPrice) || 0;
     const cleanName = fruitForm.name.trim();
@@ -869,7 +915,7 @@ export default function App() {
     showToast(fruitForm.id ? 'Data buah diperbarui & order/paket terkait ikut disinkronkan!' : 'Buah baru ditambahkan & Neraca tercatat!');
   };
 
-  const deleteFruit = async (fruitId) => {
+  const deleteFruitRaw = async (fruitId) => {
     if (!user) return;
     const target = fruits.find((f) => f.id === fruitId);
     if (!target) return;
@@ -947,7 +993,7 @@ export default function App() {
     }, 0);
   }, [bundleCatalogForm.items, fruits]);
 
-  const saveBundleCatalogForm = async (e) => {
+  const saveBundleCatalogFormRaw = async (e) => {
     e.preventDefault();
     if (!user || bundleCatalogForm.items.length === 0) return;
     const id = bundleCatalogForm.id || uid('bnd');
@@ -975,7 +1021,7 @@ export default function App() {
     showToast(bundleCatalogForm.id ? 'Paket bundling diperbarui!' : 'Produk bundling baru disimpan!');
   };
 
-  const deleteBundleCatalog = async (bundleId) => {
+  const deleteBundleCatalogRaw = async (bundleId) => {
     if (!user) return;
     if (!window.confirm('Hapus produk bundling ini? (Order yang sudah dibuat tidak terpengaruh)')) return;
     await deleteDoc(storeDoc('bundles', bundleId));
@@ -996,7 +1042,7 @@ export default function App() {
     setOutStockModalOpen(true);
   };
 
-  const saveOutStockForm = async (e) => {
+  const saveOutStockFormRaw = async (e) => {
     e.preventDefault();
     if (!user || !outStockForm.fruitId) return;
     const fruit = fruits.find((f) => f.id === outStockForm.fruitId);
@@ -1053,7 +1099,7 @@ export default function App() {
     setBulkModalOpen(true);
   };
 
-  const saveBulkRestockForm = async (e) => {
+  const saveBulkRestockFormRaw = async (e) => {
     e.preventDefault();
     if (!user || bulkRows.length === 0) return;
     const batch = writeBatch(db);
@@ -1270,7 +1316,7 @@ export default function App() {
     setOrderCustomer(o.customer || '');
     setOrderStatus(o.status === 'request' ? 'request' : 'confirmed');
 
-    const bundle = o.orderType === 'bundle' ? bundles.find((b) => b.name === o.bundleName) : null;
+    const bundle = o.orderType === 'bundle' ? (bundles.find((b) => b.id === o.bundleId) || bundles.find((b) => b.name === o.bundleName)) : null;
     if (bundle) {
       const mult = Number(o.bundleQty) || 1;
       const label = `${o.bundleName} (${mult} paket)`;
@@ -1296,7 +1342,7 @@ export default function App() {
     setOrderSheetOpen(true);
   };
 
-  const saveOrderSheet = async (e) => {
+  const saveOrderSheetRaw = async (e) => {
     e.preventDefault();
     if (!user) return;
 
@@ -1346,6 +1392,7 @@ export default function App() {
       await setDoc(storeDoc('orders', id), {
         id,
         orderType: 'bundle',
+        bundleId: activeSelectedBundle.id,
         bundleName: activeSelectedBundle.name,
         bundleQty: mult,
         customer: orderCustomer.trim(),
@@ -1393,7 +1440,7 @@ ${banksText}`,
     copyTextSafe(sections.join('\n\n'), 'Rincian pesanan & info pembayaran disalin untuk WA!');
   };
 
-  const confirmCompleteOrder = async (payStatus) => {
+  const confirmCompleteOrderRaw = async (payStatus) => {
     if (!user || !completeOrderTarget) return;
     const o = orders.find((x) => x.id === completeOrderTarget.id) || completeOrderTarget;
     if (o.status === 'completed') {
@@ -1469,7 +1516,7 @@ ${banksText}`,
     );
   };
 
-  const cancelOrderCompletion = async (o) => {
+  const cancelOrderCompletionRaw = async (o) => {
     if (!user || !o) return;
     if (
       !window.confirm(
@@ -1484,7 +1531,7 @@ ${banksText}`,
     showToast('Penyelesaian dibatalkan: stok kembali & penjualan dihapus.');
   };
 
-  const deleteOrder = async (orderId) => {
+  const deleteOrderRaw = async (orderId) => {
     if (!user) return;
     const o = orders.find((x) => x.id === orderId);
     if (!o) return;
@@ -1509,8 +1556,10 @@ ${banksText}`,
   // ==========================================================================
   // 9. PIUTANG (PELUNASAN TRANSFER / CASH), REKENING & KEUANGAN
   // ==========================================================================
-  const markReceivablePaid = async (o, method) => {
+  const markReceivablePaidRaw = async (o, method) => {
     if (!user) return;
+    const latest = orders.find((x) => x.id === o.id);
+    if (latest && latest.paymentStatus === 'paid') return showToast('Piutang ini sudah lunas.');
     const todayStr = getTodayDateStr();
     const batch = writeBatch(db);
     batch.update(storeDoc('orders', o.id), {
@@ -1549,7 +1598,7 @@ ${banksText}`,
     showToast(`Piutang ${o.customer} Lunas via ${method === 'cash' ? 'Cash' : 'Transfer'}!`);
   };
 
-  const saveBankForm = async (e) => {
+  const saveBankFormRaw = async (e) => {
     e.preventDefault();
     if (!user) return;
     const id = uid('b');
@@ -1576,7 +1625,7 @@ ${banksText}`,
     setFinanceModalOpen(true);
   };
 
-  const handleDeleteTransaction = async (t) => {
+  const handleDeleteTransactionRaw = async (t) => {
     if (!user) return;
 
     // --- Penjualan: batalkan penyelesaian order (stok kembali) ---
@@ -1603,16 +1652,7 @@ ${banksText}`,
     // --- Modal barang non-tunai yang tertaut ke buah: batalkan = stok dikurangi kembali ---
     if (t.type === 'capital' && t.paymentMethod === 'inventory') {
       if (!t.fruitId || !(Number(t.qty || 0) > 0)) {
-        // Catatan lama tanpa data buah/jumlah: boleh dihapus, tetapi neraca akan selisih sebesar nominalnya
-        if (
-          !window.confirm(
-            `Hapus catatan modal barang lama ini (${formatRp(t.amount)})? Stok tidak berubah, sehingga Neraca akan menunjukkan selisih ${formatRp(t.amount)} sampai Anda menelusuri atau menyesuaikannya lagi. Lanjutkan?`
-          )
-        )
-          return;
-        await deleteDoc(storeDoc('transactions', t.id));
-        showToast('Catatan modal barang lama dihapus. Cek tab Neraca untuk selisihnya.');
-        return;
+        return showToast('Modal barang lama ini terikat nilai stok dan tidak bisa dihapus manual. Ubah lewat Edit Buah atau Out Stok.');
       }
       const f = fruits.find((x) => x.id === t.fruitId);
       if (!f) return showToast('Buah ini sudah dihapus dari Stok, catatan modal barang tidak bisa dibatalkan.');
@@ -1735,7 +1775,7 @@ ${banksText}`,
     showToast('Transaksi berhasil dihapus!');
   };
 
-  const saveFinanceForm = async (e) => {
+  const saveFinanceFormRaw = async (e) => {
     e.preventDefault();
     if (!user) return;
     const date = financeForm.date || getTodayDateStr();
@@ -1791,7 +1831,7 @@ ${banksText}`,
   };
 
   // Pindahkan penyesuaian nilai lama (stok awal sebelum sistem) dari laba ke Tambahan Modal Barang
-  const moveRevalToCapital = async (t) => {
+  const moveRevalToCapitalRaw = async (t) => {
     if (!user || Number(t.amount || 0) <= 0) return;
     if (
       !window.confirm(
@@ -1817,8 +1857,9 @@ ${banksText}`,
   };
 
   // Sinkronisasi Penyeimbang Neraca untuk data lama sebelum pembaruan ini
-  const syncLegacyBalanceDiff = async (diffAmount) => {
+  const syncLegacyBalanceDiffRaw = async (diffAmount) => {
     if (!user || Math.abs(diffAmount) < 1) return;
+    if (!window.confirm(`Catat selisih ${formatRp(diffAmount)} sebagai Modal Awal Stok? Lakukan ini hanya kalau selisih berasal dari stok lama sebelum pakai sistem.`)) return;
     const id = uid('sync_cap');
     await setDoc(storeDoc('transactions', id), {
       id,
@@ -1835,8 +1876,31 @@ ${banksText}`,
   // ==========================================================================
   // 10. DATA KEUANGAN PER PERIODE & AUDIT NERACA DINAMIS
   // ==========================================================================
+  // Semua aksi tulis dibungkus guard (anti dobel-klik + tampil error)
+  const adjustStock = guard(adjustStockRaw);
+  const buyAllShoppingItems = guard(buyAllShoppingItemsRaw);
+  const saveFruitForm = guard(saveFruitFormRaw);
+  const deleteFruit = guard(deleteFruitRaw);
+  const saveBundleCatalogForm = guard(saveBundleCatalogFormRaw);
+  const deleteBundleCatalog = guard(deleteBundleCatalogRaw);
+  const saveOutStockForm = guard(saveOutStockFormRaw);
+  const saveBulkRestockForm = guard(saveBulkRestockFormRaw);
+  const saveOrderSheet = guard(saveOrderSheetRaw);
+  const confirmCompleteOrder = guard(confirmCompleteOrderRaw);
+  const cancelOrderCompletion = guard(cancelOrderCompletionRaw);
+  const deleteOrder = guard(deleteOrderRaw);
+  const markReceivablePaid = guard(markReceivablePaidRaw);
+  const saveBankForm = guard(saveBankFormRaw);
+  const handleDeleteTransaction = guard(handleDeleteTransactionRaw);
+  const saveFinanceForm = guard(saveFinanceFormRaw);
+  const moveRevalToCapital = guard(moveRevalToCapitalRaw);
+  const syncLegacyBalanceDiff = guard(syncLegacyBalanceDiffRaw);
+
   const salesList = useMemo(
-    () => transactions.filter((t) => t.type === 'sale' && isDateInPeriod(t.date, financePeriods.sales)),
+    () =>
+      transactions
+        .filter((t) => t.type === 'sale' && isDateInPeriod(t.date, financePeriods.sales))
+        .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || (b.createdAt || 0) - (a.createdAt || 0)),
     [transactions, financePeriods.sales]
   );
 
@@ -1888,7 +1952,7 @@ ${banksText}`,
       .filter((t) => t.paymentMethod !== 'cash')
       .reduce((s, t) => s + Number(t.amount || 0), 0);
 
-    const unpaidAr = list.filter((t) => t.type === 'sale' && t.paymentStatus === 'unpaid').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const unpaidAr = list.filter((t) => t.type === 'sale' && t.paymentStatus !== 'paid').reduce((s, t) => s + Number(t.amount || 0), 0);
     const invBought = list.filter((t) => t.type === 'inventory_buy').reduce((s, t) => s + Number(t.amount || 0), 0);
     const opexPaid = list.filter((t) => t.type === 'opex').reduce((s, t) => s + Number(t.amount || 0), 0);
     const stockLoss = list.filter((t) => t.type === 'stock_out').reduce((s, t) => s + Number(t.amount || 0), 0);
@@ -1946,6 +2010,7 @@ ${banksText}`,
         items.push({ ...t, effectiveDate: t.date, dir: 'out' });
       }
     });
+    items.sort((a, b) => String(b.effectiveDate || '').localeCompare(String(a.effectiveDate || '')) || (b.createdAt || 0) - (a.createdAt || 0));
     const nonCashCapItems = transactions.filter(
       (t) => t.type === 'capital' && t.paymentMethod === 'inventory' && isDateInPeriod(t.date, financePeriods.cashflow)
     );
@@ -2697,7 +2762,7 @@ ${banksText}`,
                           >
                             Salin
                           </button>
-                          <button onClick={() => deleteDoc(storeDoc('bankAccounts', b.id))} className="px-2 py-1.5 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
+                          <button onClick={() => { if (window.confirm(`Hapus rekening ${b.bank} ${b.number}?`)) deleteDoc(storeDoc('bankAccounts', b.id)).catch((e) => showToast(e.message)); }} className="px-2 py-1.5 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
                             x
                           </button>
                         </div>
