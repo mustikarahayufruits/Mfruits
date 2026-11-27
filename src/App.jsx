@@ -1603,7 +1603,16 @@ ${banksText}`,
     // --- Modal barang non-tunai yang tertaut ke buah: batalkan = stok dikurangi kembali ---
     if (t.type === 'capital' && t.paymentMethod === 'inventory') {
       if (!t.fruitId || !(Number(t.qty || 0) > 0)) {
-        return showToast('Modal barang lama ini terikat nilai stok dan tidak bisa dihapus manual. Ubah lewat Edit Buah atau Out Stok.');
+        // Catatan lama tanpa data buah/jumlah: boleh dihapus, tetapi neraca akan selisih sebesar nominalnya
+        if (
+          !window.confirm(
+            `Hapus catatan modal barang lama ini (${formatRp(t.amount)})? Stok tidak berubah, sehingga Neraca akan menunjukkan selisih ${formatRp(t.amount)} sampai Anda menelusuri atau menyesuaikannya lagi. Lanjutkan?`
+          )
+        )
+          return;
+        await deleteDoc(storeDoc('transactions', t.id));
+        showToast('Catatan modal barang lama dihapus. Cek tab Neraca untuk selisihnya.');
+        return;
       }
       const f = fruits.find((x) => x.id === t.fruitId);
       if (!f) return showToast('Buah ini sudah dihapus dari Stok, catatan modal barang tidak bisa dibatalkan.');
