@@ -252,6 +252,7 @@ export default function App() {
   // UI states
   const [currentView, setCurrentView] = useState('home');
   const [stockFilter, setStockFilter] = useState('all');
+  const [stockSearch, setStockSearch] = useState('');
   const [financeSubTab, setFinanceSubTab] = useState('sales');
   const [financePeriods, setFinancePeriods] = useState({
     sales: 'all',
@@ -1719,38 +1720,35 @@ ${banksText}`,
           {/* ================= VIEW 2: STOK BUAH & KATALOG PAKET BUNDLING ================= */}
           {currentView === 'stock' && (
             <section className="space-y-3">
+              {/* Header Ringkas + 2 Tombol Utama */}
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <h2 className="text-base font-extrabold">Stok & Paket Bundling</h2>
-                  <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Kelola stok buah & katalog produk bundling</p>
+                  <h2 className="text-base font-extrabold">Stok MFruits</h2>
+                  <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">
+                    {fruits.length} item • Nilai {formatRp(metrics.inventoryValue)}
+                  </p>
                 </div>
                 {stockFilter === 'bundles' ? (
                   <button
                     onClick={() => openBundleCatalogModal(null)}
                     style={{ backgroundColor: 'var(--accent)' }}
-                    className="px-3 py-2 rounded-xl text-white text-xs font-extrabold shadow-xs"
+                    className="px-3.5 py-2 rounded-xl text-white text-xs font-extrabold shadow-xs"
                   >
-                    + Buat Paket Bundling
+                    + Paket Bundling
                   </button>
                 ) : (
                   <div className="flex items-center gap-1.5">
                     <button
-                      onClick={openOutStockModal}
-                      className="px-2.5 py-2 rounded-xl bg-rose-500/15 text-rose-500 text-xs font-extrabold"
-                    >
-                      - Out Stok
-                    </button>
-                    <button
                       onClick={openBulkRestockModal}
                       style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }}
-                      className="px-2.5 py-2 rounded-xl text-xs font-extrabold"
+                      className="px-3 py-2 rounded-xl text-xs font-extrabold"
                     >
                       + Belanja
                     </button>
                     <button
                       onClick={() => openFruitModal(null)}
                       style={{ backgroundColor: 'var(--accent)' }}
-                      className="px-2.5 py-2 rounded-xl text-white text-xs font-bold"
+                      className="px-3 py-2 rounded-xl text-white text-xs font-extrabold"
                     >
                       + Buah
                     </button>
@@ -1758,35 +1756,39 @@ ${banksText}`,
                 )}
               </div>
 
-              <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-bold pb-0.5">
-                {[
-                  { id: 'all', label: `Semua Buah (${fruits.length})` },
-                  { id: 'bundles', label: `Paket Bundling (${bundles.length})` },
-                  { id: 'low', label: 'Habis / Menipis' },
-                  { id: 'ready', label: 'Stok Aman' },
-                  { id: 'out_history', label: `Riwayat Out (${stockOutHistory.length})` }
-                ].map((f) => (
-                  <button
-                    key={f.id}
-                    onClick={() => setStockFilter(f.id)}
-                    style={
-                      stockFilter === f.id
-                        ? { backgroundColor: 'var(--accent)', color: '#fff' }
-                        : { backgroundColor: 'var(--bg-card)', color: 'var(--text-muted)', borderColor: 'var(--border-color)' }
-                    }
-                    className="px-3 py-1.5 rounded-xl border shrink-0"
-                  >
-                    {f.label}
-                  </button>
-                ))}
+              {/* Tab Utama Segmented: Daftar Buah vs Paket Bundling */}
+              <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl grid grid-cols-2 gap-1 p-1">
+                <button
+                  onClick={() => setStockFilter('all')}
+                  style={
+                    stockFilter !== 'bundles'
+                      ? { backgroundColor: 'var(--accent)', color: '#fff' }
+                      : { color: 'var(--text-muted)' }
+                  }
+                  className="py-2 rounded-xl text-xs font-extrabold transition-colors"
+                >
+                  Stok Buah ({fruits.length})
+                </button>
+                <button
+                  onClick={() => setStockFilter('bundles')}
+                  style={
+                    stockFilter === 'bundles'
+                      ? { backgroundColor: 'var(--accent)', color: '#fff' }
+                      : { color: 'var(--text-muted)' }
+                  }
+                  className="py-2 rounded-xl text-xs font-extrabold transition-colors"
+                >
+                  Paket Bundling ({bundles.length})
+                </button>
               </div>
 
               {stockFilter === 'bundles' ? (
+                /* SUB-VIEW: KATALOG PAKET BUNDLING */
                 <div className="space-y-2.5">
                   {bundles.length === 0 ? (
-                    <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs space-y-2">
-                      <p>Belum ada produk <b>Paket Bundling</b> yang dibuat.</p>
-                      <p className="text-[11px]">Buat produk bundling terlebih dahulu (misal: <i>Paket Parsel Sehat</i>) agar bisa langsung dipilih saat mencatat Order Bundling.</p>
+                    <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs space-y-1.5">
+                      <p className="font-bold">Belum ada Paket Bundling</p>
+                      <p className="text-[11px]">Ketuk <b>+ Paket Bundling</b> di kanan atas untuk membuat paket siap jual.</p>
                     </div>
                   ) : (
                     bundles.map((b) => {
@@ -1798,151 +1800,184 @@ ${banksText}`,
                       const estProfit = Number(b.sellPrice || 0) - unitCost;
 
                       return (
-                        <div key={b.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3.5 space-y-2.5 text-xs">
+                        <div key={b.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3.5 space-y-2 text-xs">
                           <div className="flex items-start justify-between gap-2">
                             <div>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }} className="px-2 py-0.5 rounded text-[9px] font-extrabold uppercase">
-                                  PRODUK BUNDLING
-                                </span>
-                                <strong className="text-sm font-extrabold">{b.name}</strong>
-                              </div>
-                              {b.desc && <p style={{ color: 'var(--text-muted)' }} className="text-[11px] mt-0.5">{b.desc}</p>}
+                              <strong className="text-sm font-extrabold block">{b.name}</strong>
+                              <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">
+                                Modal {formatRp(unitCost)} • Jual <b className="text-emerald-500">{formatRp(b.sellPrice)}</b> (+{formatRp(estProfit)})
+                              </span>
                             </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button onClick={() => openBundleCatalogModal(b)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-2 py-1 rounded-lg text-[11px] font-bold">
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button onClick={() => openBundleCatalogModal(b)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-2.5 py-1 rounded-lg text-[11px] font-bold">
                                 Edit
                               </button>
                               <button onClick={() => deleteBundleCatalog(b.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
-                                Hapus
+                                ×
                               </button>
                             </div>
                           </div>
-
-                          <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl space-y-1">
-                            <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold uppercase block">Isi Komposisi per 1 Paket:</span>
+                          <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-3 py-2 rounded-xl text-[11px] flex flex-wrap gap-x-3 gap-y-1">
                             {(b.items || []).map((it, idx) => (
-                              <div key={idx} className="flex justify-between text-[11px]">
-                                <span>• {it.fruitName}</span>
-                                <strong>{it.qty} {it.unit}</strong>
-                              </div>
+                              <span key={idx}>• {it.fruitName} <b>({it.qty} {it.unit})</b></span>
                             ))}
-                          </div>
-
-                          <div style={{ borderColor: 'var(--border-color)' }} className="flex items-center justify-between pt-2 border-t text-[11px]">
-                            <span style={{ color: 'var(--text-muted)' }}>Modal Paket: <b>{formatRp(unitCost)}</b></span>
-                            <span>Jual: <b className="text-emerald-500">{formatRp(b.sellPrice)}</b> (<b className="text-teal-500">+{formatRp(estProfit)}</b>)</span>
                           </div>
                         </div>
                       );
                     })
                   )}
                 </div>
-              ) : stockFilter === 'out_history' ? (
-                <div className="space-y-2.5">
-                  {stockOutHistory.length === 0 ? (
-                    <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
-                      Belum ada catatan pengeluaran stok non-penjualan (buah rusak/busuk/tester).
-                    </div>
-                  ) : (
-                    stockOutHistory.map((t) => (
-                      <div key={t.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3.5 flex items-start justify-between gap-2 text-xs">
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-500 text-[10px] font-extrabold">
-                              {t.reason || 'Out Stok'}
-                            </span>
-                            <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">{t.date}</span>
-                          </div>
-                          <strong className="block mt-1">{t.desc}</strong>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <strong className="text-rose-500 block">-{formatRp(t.amount)}</strong>
-                          <button onClick={() => deleteDoc(storeDoc('transactions', t.id))} className="text-[10px] text-rose-500 font-bold mt-1">
-                            Hapus
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              ) : fruits.length === 0 ? (
-                <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
-                  Belum ada data stok buah. Tekan <b>+ Belanja</b> atau <b>+ Buah</b> untuk mulai mengisi.
-                </div>
               ) : (
-                <div className="space-y-2.5">
-                  {fruits
-                    .filter((f) =>
-                      stockFilter === 'low'
-                        ? Number(f.stock) <= Number(f.minStock)
-                        : stockFilter === 'ready'
-                        ? Number(f.stock) > Number(f.minStock)
-                        : true
-                    )
-                    .map((f) => {
-                      const empty = Number(f.stock) <= 0;
-                      const low = Number(f.stock) <= Number(f.minStock);
-                      return (
-                        <div key={f.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3.5 space-y-2.5">
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <strong className="text-sm font-extrabold">{f.name}</strong>
-                                <span style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }} className="px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">
-                                  {f.unit}
-                                </span>
-                                {empty ? (
-                                  <span className="px-1.5 py-0.5 rounded bg-rose-500 text-white text-[9px] font-bold">HABIS</span>
-                                ) : low ? (
-                                  <span className="px-1.5 py-0.5 rounded bg-amber-500 text-white text-[9px] font-bold">MENIPIS</span>
-                                ) : null}
-                              </div>
-                              <span style={{ color: 'var(--text-muted)' }} className="text-[11px]">
-                                Modal: <b>{formatRp(f.buyPrice)}</b>/{f.unit} • Jual: <b className="text-emerald-500">{formatRp(f.sellPrice)}</b>
-                              </span>
+                /* SUB-VIEW: DAFTAR STOK BUAH SIMPLE & RINGKAS */
+                <>
+                  {/* Pencarian Cepat + Tombol Out Stok */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="Cari nama buah..."
+                      value={stockSearch}
+                      onChange={(e) => setStockSearch(e.target.value)}
+                      style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }}
+                      className="flex-1 border px-3 py-2 rounded-xl text-xs outline-none font-medium"
+                    />
+                    <button
+                      onClick={openOutStockModal}
+                      className="px-3 py-2 rounded-xl bg-rose-500/15 text-rose-500 text-xs font-extrabold shrink-0"
+                    >
+                      - Out Stok
+                    </button>
+                  </div>
+
+                  {/* Pill Filter Status Ringkas */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto text-[11px] font-bold pb-0.5">
+                    {[
+                      { id: 'all', label: 'Semua' },
+                      { id: 'low', label: `Menipis / Habis (${metrics.lowStockItems.length})` },
+                      { id: 'out_history', label: `Riwayat Out (${stockOutHistory.length})` }
+                    ].map((f) => (
+                      <button
+                        key={f.id}
+                        onClick={() => setStockFilter(f.id)}
+                        style={
+                          stockFilter === f.id
+                            ? { backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)', borderColor: 'var(--accent)' }
+                            : { backgroundColor: 'var(--bg-card)', color: 'var(--text-muted)', borderColor: 'var(--border-color)' }
+                        }
+                        className="px-2.5 py-1 rounded-lg border shrink-0"
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {stockFilter === 'out_history' ? (
+                    <div className="space-y-2">
+                      {stockOutHistory.length === 0 ? (
+                        <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
+                          Belum ada riwayat pengeluaran stok non-penjualan.
+                        </div>
+                      ) : (
+                        stockOutHistory.map((t) => (
+                          <div key={t.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3 flex items-center justify-between gap-2 text-xs">
+                            <div className="min-w-0">
+                              <span className="text-[10px] font-extrabold text-rose-500 block">{t.reason} • {t.date}</span>
+                              <strong className="block truncate mt-0.5">{t.desc}</strong>
                             </div>
-                            <div className="flex items-center gap-1">
-                              <button onClick={() => openFruitModal(f)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-2 py-1 rounded-lg text-[11px] font-bold">
-                                Edit
-                              </button>
-                              <button onClick={() => deleteFruit(f.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
+                            <div className="text-right shrink-0">
+                              <strong className="text-rose-500 block">-{formatRp(t.amount)}</strong>
+                              <button onClick={() => deleteDoc(storeDoc('transactions', t.id))} className="text-[10px] text-rose-500 font-bold">
                                 Hapus
                               </button>
                             </div>
                           </div>
-                          <div style={{ borderColor: 'var(--border-color)' }} className="flex items-center justify-between pt-2 border-t">
-                            <div>
-                              <span className={`text-xs font-extrabold block ${empty ? 'text-rose-500' : ''}`}>
-                                Stok: {f.stock} {f.unit}
-                              </span>
-                              {f.unit === 'kg' && Number(f.stock) > 0 && (
-                                <span style={{ color: 'var(--text-muted)' }} className="text-[10px]">
-                                  {formatWeightDetail(f.stock, f.unit)}
-                                </span>
-                              )}
+                        ))
+                      )}
+                    </div>
+                  ) : fruits.length === 0 ? (
+                    <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
+                      Belum ada data buah. Ketuk <b>+ Belanja</b> atau <b>+ Buah</b> untuk mulai.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {fruits
+                        .filter((f) => {
+                          const matchQuery = f.name.toLowerCase().includes(stockSearch.trim().toLowerCase());
+                          if (!matchQuery) return false;
+                          if (stockFilter === 'low') return Number(f.stock) <= Number(f.minStock);
+                          return true;
+                        })
+                        .map((f) => {
+                          const empty = Number(f.stock) <= 0;
+                          const low = Number(f.stock) <= Number(f.minStock);
+                          return (
+                            <div
+                              key={f.id}
+                              style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }}
+                              className="border rounded-2xl p-3 flex items-center justify-between gap-2.5"
+                            >
+                              {/* Kiri: Nama, Status & Harga Ringkas (Ketuk untuk Edit) */}
+                              <div onClick={() => openFruitModal(f)} className="min-w-0 flex-1 cursor-pointer">
+                                <div className="flex items-center gap-1.5">
+                                  <strong className="text-sm font-extrabold truncate">{f.name}</strong>
+                                  {empty ? (
+                                    <span className="px-1.5 py-0.5 rounded bg-rose-500 text-white text-[9px] font-extrabold shrink-0">HABIS</span>
+                                  ) : low ? (
+                                    <span className="px-1.5 py-0.5 rounded bg-amber-500 text-white text-[9px] font-extrabold shrink-0">MENIPIS</span>
+                                  ) : null}
+                                </div>
+                                <div style={{ color: 'var(--text-muted)' }} className="text-[11px] mt-0.5 flex items-center gap-1.5 flex-wrap">
+                                  <span>Modal {formatRp(f.buyPrice)}</span>
+                                  <span>•</span>
+                                  <span className="text-emerald-500 font-bold">Jual {formatRp(f.sellPrice)}/{f.unit}</span>
+                                </div>
+                              </div>
+
+                              {/* Kanan: Angka Sisa Stok Besar & Kontrol Cepat */}
+                              <div className="flex items-center gap-2 shrink-0">
+                                <div className="text-right">
+                                  <span className={`text-sm font-extrabold block leading-tight ${empty ? 'text-rose-500' : low ? 'text-amber-500' : ''}`}>
+                                    {f.stock} <span className="text-[11px] font-bold opacity-80">{f.unit}</span>
+                                  </span>
+                                  {f.unit === 'kg' && Number(f.stock) > 0 && (
+                                    <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block">
+                                      {Math.round(Number(f.stock) * 1000).toLocaleString('id-ID')} gr
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => adjustStock(f.id, f.unit === 'kg' ? -0.25 : -1, false)}
+                                    title={f.unit === 'kg' ? 'Kurangi 0.25 kg' : 'Kurangi 1'}
+                                    style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                                    className="w-7 h-7 rounded-lg font-extrabold text-xs flex items-center justify-center"
+                                  >
+                                    -
+                                  </button>
+                                  <button
+                                    onClick={() => adjustStock(f.id, 1, true)}
+                                    title="Tambah Beli +1"
+                                    style={{ backgroundColor: 'var(--accent)' }}
+                                    className="w-7 h-7 rounded-lg text-white font-extrabold text-xs flex items-center justify-center"
+                                  >
+                                    +
+                                  </button>
+                                  <button
+                                    onClick={() => openFruitModal(f)}
+                                    title="Edit / Hapus Buah"
+                                    style={{ backgroundColor: 'var(--bg-card-sub)', color: 'var(--text-muted)' }}
+                                    className="w-7 h-7 rounded-lg font-bold text-xs flex items-center justify-center"
+                                  >
+                                    ✎
+                                  </button>
+                                </div>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                onClick={() => adjustStock(f.id, f.unit === 'kg' ? -0.25 : -1, false)}
-                                style={{ backgroundColor: 'var(--bg-card-sub)' }}
-                                className="px-2.5 h-8 rounded-xl font-extrabold text-xs"
-                              >
-                                {f.unit === 'kg' ? '-0.25' : '-1'}
-                              </button>
-                              <button
-                                onClick={() => adjustStock(f.id, 1, true)}
-                                style={{ backgroundColor: 'var(--accent)' }}
-                                className="px-3 h-8 rounded-xl text-white text-xs font-bold"
-                              >
-                                +1 Beli
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                </>
               )}
             </section>
           )}
@@ -2705,9 +2740,23 @@ ${banksText}`,
                   </div>
                 )}
 
-                <button type="submit" style={{ backgroundColor: 'var(--accent)' }} className="w-full py-3 rounded-xl text-white font-extrabold">
-                  Simpan Data Buah
-                </button>
+                <div className="flex items-center gap-2 pt-1">
+                  {fruitForm.id && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        deleteFruit(fruitForm.id);
+                        setFruitModalOpen(false);
+                      }}
+                      className="px-4 py-3 rounded-xl bg-rose-500/15 text-rose-500 font-extrabold"
+                    >
+                      Hapus
+                    </button>
+                  )}
+                  <button type="submit" style={{ backgroundColor: 'var(--accent)' }} className="flex-1 py-3 rounded-xl text-white font-extrabold">
+                    Simpan Data Buah
+                  </button>
+                </div>
               </form>
             </div>
           </div>
