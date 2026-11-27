@@ -755,17 +755,59 @@ export default function App() {
 
     if (fruitForm.id) {
       const oldFruit = fruits.find((f) => f.id === fruitForm.id);
-      const oldVal = oldFruit ? Number(oldFruit.stock || 0) * Number(oldFruit.buyPrice || 0) : 0;
-      const newVal = newStock * newBuyPrice;
-      const diffVal = Number((newVal - oldVal).toFixed(2));
+      const oldStock = oldFruit ? Number(oldFruit.stock || 0) : 0;
+      const oldBuy = oldFruit ? Number(oldFruit.buyPrice || 0) : 0;
+      const totalDiff = newStock * newBuyPrice - oldStock * oldBuy; // perubahan nilai persediaan
+      const qtyDiff = r3(newStock - oldStock);
+      let equityEffect = 0; // dampak ke modal/laba dari bagian jumlah stok
 
+      if (qtyDiff > 0) {
+        // Stok bertambah bukan dari belanja = barang lama sebelum sistem -> Tambahan Modal Barang (laba tidak naik)
+        const capAmount = Number((qtyDiff * newBuyPrice).toFixed(2));
+        equityEffect = capAmount;
+        const capId = uid('addstock');
+        batch.set(storeDoc('transactions', capId), {
+          id: capId,
+          type: 'capital',
+          paymentMethod: 'inventory',
+          fruitId: id,
+          fruitName: cleanName,
+          unit: cleanUnit,
+          qty: qtyDiff,
+          date: getTodayDateStr(),
+          desc: `Tambahan Modal Barang (Stok Lama): ${cleanName} (+${qtyDiff} ${cleanUnit})`,
+          amount: capAmount,
+          createdAt: Date.now()
+        });
+      } else if (qtyDiff < 0) {
+        // Stok dikurangi lewat Edit Buah dicatat sebagai Out Stok agar ada riwayat & bisa dibatalkan
+        const lossAmount = Number((Math.abs(qtyDiff) * oldBuy).toFixed(2));
+        equityEffect = -lossAmount;
+        const outId = uid('out');
+        batch.set(storeDoc('transactions', outId), {
+          id: outId,
+          type: 'stock_out',
+          fruitId: id,
+          fruitName: cleanName,
+          unit: cleanUnit,
+          qty: Math.abs(qtyDiff),
+          reason: 'Koreksi Stok (Edit Buah)',
+          date: getTodayDateStr(),
+          desc: `Koreksi Stok (Edit Buah): ${cleanName} ${Math.abs(qtyDiff)} ${cleanUnit}`,
+          amount: lossAmount,
+          createdAt: Date.now()
+        });
+      }
+
+      // Sisanya hanya perubahan harga modal pada stok yang sudah ada
+      const diffVal = Number((totalDiff - equityEffect).toFixed(2));
       if (Math.abs(diffVal) >= 1) {
         const tId = uid('rev');
         batch.set(storeDoc('transactions', tId), {
           id: tId,
           type: 'revaluation',
           date: getTodayDateStr(),
-          desc: `Penyesuaian Nilai Stok: ${cleanName}`,
+          desc: `Penyesuaian Harga Modal: ${cleanName}`,
           amount: diffVal,
           createdAt: Date.now()
         });
@@ -801,6 +843,9 @@ export default function App() {
           type: 'capital',
           paymentMethod: 'inventory',
           fruitId: id,
+          fruitName: cleanName,
+          unit: cleanUnit,
+          qty: newStock,
           date: getTodayDateStr(),
           desc: `Modal Awal Persediaan: ${cleanName} (${newStock} ${cleanUnit})`,
           amount: initVal,
@@ -1555,9 +1600,37 @@ ${banksText}`,
       return showToast('Penyesuaian nilai dibuat otomatis oleh sistem untuk menjaga neraca, jadi tidak bisa dihapus manual.');
     }
 
-    // --- Modal barang non-tunai: terikat nilai stok ---
+    // --- Modal barang non-tunai yang tertaut ke buah: batalkan = stok dikurangi kembali ---
     if (t.type === 'capital' && t.paymentMethod === 'inventory') {
-      return showToast('Modal barang terikat dengan nilai stok. Ubah lewat Edit Buah atau Out Stok.');
+      if (!t.fruitId || !(Number(t.qty || 0) > 0)) {
+        return showToast('Modal barang lama ini terikat nilai stok dan tidak bisa dihapus manual. Ubah lewat Edit Buah atau Out Stok.');
+      }
+      const f = fruits.find((x) => x.id === t.fruitId);
+      if (!f) return showToast('Buah ini sudah dihapus dari Stok, catatan modal barang tidak bisa dibatalkan.');
+      const qty = Number(t.qty || 0);
+      if (qty > Number(f.stock || 0) + 0.0005) {
+        return showToast(`Stok ${f.name} tersisa ${f.stock} ${f.unit}, kurang dari ${qty}. Stok sudah terpakai/terjual.`);
+      }
+      if (!window.confirm(`Batalkan tambahan modal barang ini? Stok ${f.name} dikurangi ${qty} ${f.unit}.`)) return;
+      const batch2 = writeBatch(db);
+      const removedValue = qty * Number(f.buyPrice || 0);
+      batch2.update(storeDoc('fruits', f.id), { stock: r3(Number(f.stock || 0) - qty) });
+      const revalDiff = Number((Number(t.amount || 0) - removedValue).toFixed(2));
+      if (Math.abs(revalDiff) >= 1) {
+        const revId = uid('rev');
+        batch2.set(storeDoc('transactions', revId), {
+          id: revId,
+          type: 'revaluation',
+          date: getTodayDateStr(),
+          desc: `Penyesuaian Pembatalan Modal Barang: ${f.name}`,
+          amount: revalDiff,
+          createdAt: Date.now()
+        });
+      }
+      batch2.delete(storeDoc('transactions', t.id));
+      await batch2.commit();
+      showToast('Tambahan modal barang dibatalkan & stok dikurangi kembali.');
+      return;
     }
 
     if (!window.confirm('Hapus transaksi ini? Stok & saldo akan disesuaikan otomatis.')) return;
@@ -1708,6 +1781,32 @@ ${banksText}`,
     }
   };
 
+  // Pindahkan penyesuaian nilai lama (stok awal sebelum sistem) dari laba ke Tambahan Modal Barang
+  const moveRevalToCapital = async (t) => {
+    if (!user || Number(t.amount || 0) <= 0) return;
+    if (
+      !window.confirm(
+        `Pindahkan ${formatRp(t.amount)} dari laba ke Tambahan Modal Barang? Gunakan ini hanya jika nilai tersebut adalah stok lama sebelum memakai sistem.`
+      )
+    )
+      return;
+    const name = (t.desc || '').split(':').slice(1).join(':').trim();
+    const capId = uid('movecap');
+    const batch = writeBatch(db);
+    batch.delete(storeDoc('transactions', t.id));
+    batch.set(storeDoc('transactions', capId), {
+      id: capId,
+      type: 'capital',
+      paymentMethod: 'inventory',
+      date: t.date || getTodayDateStr(),
+      desc: `Tambahan Modal Barang (Stok Lama)${name ? ': ' + name : ''}`,
+      amount: Number(t.amount),
+      createdAt: Date.now()
+    });
+    await batch.commit();
+    showToast('Dipindahkan ke Tambahan Modal Barang. Laba berkurang, neraca tetap seimbang.');
+  };
+
   // Sinkronisasi Penyeimbang Neraca untuk data lama sebelum pembaruan ini
   const syncLegacyBalanceDiff = async (diffAmount) => {
     if (!user || Math.abs(diffAmount) < 1) return;
@@ -1844,8 +1943,16 @@ ${banksText}`,
     return { cfIn, cfInCash, cfInTransfer, cfOut, items, nonCashCapItems };
   }, [transactions, financePeriods.cashflow]);
 
+  const legacyRevals = useMemo(
+    () => transactions.filter((t) => t.type === 'revaluation' && (t.desc || '').startsWith('Penyesuaian Nilai Stok')),
+    [transactions]
+  );
+
   const stockOutHistory = useMemo(
-    () => transactions.filter((t) => t.type === 'stock_out'),
+    () =>
+      transactions.filter(
+        (t) => t.type === 'stock_out' || (t.type === 'capital' && t.paymentMethod === 'inventory' && t.fruitId && Number(t.qty || 0) > 0)
+      ),
     [transactions]
   );
 
@@ -2271,7 +2378,7 @@ ${banksText}`,
                     {[
                       { id: 'all', label: 'Semua' },
                       { id: 'low', label: `Menipis / Habis (${metrics.lowStockItems.length})` },
-                      { id: 'out_history', label: `Riwayat Out (${stockOutHistory.length})` }
+                      { id: 'out_history', label: `Riwayat Koreksi (${stockOutHistory.length})` }
                     ].map((f) => (
                       <button
                         key={f.id}
@@ -2292,17 +2399,17 @@ ${banksText}`,
                     <div className="space-y-2">
                       {stockOutHistory.length === 0 ? (
                         <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
-                          Belum ada riwayat pengeluaran stok non-penjualan.
+                          Belum ada riwayat koreksi stok (penambahan modal barang / pengeluaran non-penjualan).
                         </div>
                       ) : (
                         stockOutHistory.map((t) => (
                           <div key={t.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3 flex items-center justify-between gap-2 text-xs">
                             <div className="min-w-0">
-                              <span className="text-[10px] font-extrabold text-rose-500 block">{t.reason} • {t.date}</span>
+                              <span className={`text-[10px] font-extrabold block ${t.type === 'capital' ? 'text-emerald-500' : 'text-rose-500'}`}>{t.type === 'capital' ? 'Tambahan Modal Barang' : t.reason} • {t.date}</span>
                               <strong className="block truncate mt-0.5">{t.desc}</strong>
                             </div>
                             <div className="text-right shrink-0">
-                              <strong className="text-rose-500 block">-{formatRp(t.amount)}</strong>
+                              <strong className={`block ${t.type === 'capital' ? 'text-emerald-500' : 'text-rose-500'}`}>{t.type === 'capital' ? '+' : '-'}{formatRp(t.amount)}</strong>
                               <button onClick={() => handleDeleteTransaction(t)} className="text-[10px] text-rose-500 font-bold">
                                 Hapus
                               </button>
@@ -2864,6 +2971,37 @@ ${banksText}`,
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+
+              {financeSubTab === 'pnl' && legacyRevals.length > 0 && (
+                <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-4 space-y-2 text-xs">
+                  <div>
+                    <strong className="block">Penyesuaian Nilai (Lama)</strong>
+                    <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block">
+                      Hasil edit stok sebelum ada pencatatan modal barang. Jika ini stok lama sebelum memakai sistem, pindahkan ke Modal Barang agar tidak dihitung sebagai laba.
+                    </span>
+                  </div>
+                  {legacyRevals.map((t) => (
+                    <div key={t.id} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <strong className="block truncate">{t.desc}</strong>
+                        <span style={{ color: 'var(--text-muted)' }} className="text-[10px]">{t.date}</span>
+                      </div>
+                      <div className="text-right shrink-0 space-y-1">
+                        <strong className={`block ${Number(t.amount) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                          {Number(t.amount) >= 0 ? '+' : ''}{formatRp(t.amount)}
+                        </strong>
+                        {Number(t.amount) > 0 ? (
+                          <button onClick={() => moveRevalToCapital(t)} className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-500 text-[10px] font-bold">
+                            Pindahkan ke Modal Barang
+                          </button>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block">Pengurangan: biarkan sebagai kerugian</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
 
