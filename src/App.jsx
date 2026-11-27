@@ -524,6 +524,7 @@ export default function App() {
         paymentMethod: 'cash',
         date: getTodayDateStr(),
         desc: `Beli Stok ${f.name} (${actualDelta} ${f.unit})`,
+        boughtItems: [{ fruitId: f.id, fruitName: f.name, qty: actualDelta, unit: f.unit, buyPrice: Number(f.buyPrice || 0) }],
         amount: cost,
         createdAt: Date.now()
       });
@@ -559,6 +560,7 @@ export default function App() {
     const batch = writeBatch(db);
     let totalSpent = 0;
 
+    const boughtItems = [];
     metrics.shoppingList.forEach((item) => {
       const fruit = fruits.find((f) => f.id === item.fruitId);
       if (fruit) {
@@ -567,6 +569,7 @@ export default function App() {
           stock: Number((Number(fruit.stock) + qty).toFixed(3))
         });
         totalSpent += qty * Number(fruit.buyPrice);
+        boughtItems.push({ fruitId: fruit.id, fruitName: fruit.name, qty, unit: fruit.unit, buyPrice: Number(fruit.buyPrice || 0) });
       }
     });
 
@@ -578,6 +581,7 @@ export default function App() {
         paymentMethod: 'cash',
         date: getTodayDateStr(),
         desc: 'Belanja Stok Kekurangan Pesanan',
+        boughtItems,
         amount: totalSpent,
         createdAt: Date.now()
       });
@@ -871,6 +875,7 @@ export default function App() {
     let grandTotal = 0;
     let newFruitsCreated = 0;
     const summaryNames = [];
+    const boughtItems = [];
 
     bulkRows.forEach((r, idx) => {
       const qty = Number(r.qty) || 0;
@@ -917,6 +922,7 @@ export default function App() {
             ...(r.sellPrice !== '' && Number(r.sellPrice) > 0 ? { sellPrice: Number(r.sellPrice) } : {})
           });
           summaryNames.push(`${existing.name} (${qty} ${existing.unit})`);
+          boughtItems.push({ fruitId: existing.id, fruitName: existing.name, qty, unit: existing.unit, buyPrice });
         } else {
           const newId = 'f_' + Date.now() + '_' + idx;
           batch.set(storeDoc('fruits', newId), {
@@ -930,6 +936,7 @@ export default function App() {
           });
           newFruitsCreated++;
           summaryNames.push(`${cleanName} (${qty} ${cleanUnit})`);
+          boughtItems.push({ fruitId: newId, fruitName: cleanName, qty, unit: cleanUnit, buyPrice });
         }
       } else {
         const found = fruits.find((f) => f.id === r.fruitId);
@@ -959,6 +966,7 @@ export default function App() {
             ...(r.sellPrice !== '' && Number(r.sellPrice) > 0 ? { sellPrice: Number(r.sellPrice) } : {})
           });
           summaryNames.push(`${found.name} (${qty} ${found.unit})`);
+          boughtItems.push({ fruitId: found.id, fruitName: found.name, qty, unit: found.unit, buyPrice });
         }
       }
     });
@@ -971,6 +979,7 @@ export default function App() {
         paymentMethod: bulkPayMethod,
         date: bulkDate || getTodayDateStr(),
         desc: `Belanja Stok${bulkNote ? ' (' + bulkNote + ')' : ''}: ${summaryNames.join(', ')}`,
+        boughtItems,
         amount: grandTotal,
         createdAt: Date.now()
       });
@@ -1252,15 +1261,64 @@ ${banksText}`,
     setFinanceModalOpen(true);
   };
 
-  const handleDeleteCashflowTrx = async (t) => {
+  const handleDeleteTransaction = async (t) => {
     if (!user) return;
     const batch = writeBatch(db);
     batch.delete(storeDoc('transactions', t.id));
-    if (t.orderId && t.type === 'sale') {
+
+    if (t.type === 'sale' && t.orderId) {
       batch.update(storeDoc('orders', t.orderId), { paymentStatus: 'unpaid' });
+      await batch.commit();
+      showToast('Penjualan dihapus & order dikembalikan ke Tab Piutang.');
+      return;
     }
+
+    if (t.type === 'inventory_buy') {
+      if (t.boughtItems && t.boughtItems.length > 0) {
+        t.boughtItems.forEach((it) => {
+          const f =
+            fruits.find((item) => item.id === it.fruitId) ||
+            fruits.find((item) => item.name.trim().toLowerCase() === (it.fruitName || '').trim().toLowerCase());
+          if (f) {
+            batch.update(storeDoc('fruits', f.id), {
+              stock: Math.max(0, Number((Number(f.stock || 0) - Number(it.qty || 0)).toFixed(3)))
+            });
+          }
+        });
+        await batch.commit();
+        showToast('Belanja dihapus & stok buah otomatis dikurangi kembali!');
+      } else {
+        // Transaksi belanja lama tanpa rincian item: konversi nilai barangnya ke Modal Awal Barang agar Neraca tetap seimbang
+        const syncId = 'conv_cap_' + Date.now();
+        batch.set(storeDoc('transactions', syncId), {
+          id: syncId,
+          type: 'capital',
+          paymentMethod: 'inventory',
+          date: t.date || getTodayDateStr(),
+          desc: `Konversi Stok Lama (${t.desc})`,
+          amount: Number(t.amount || 0),
+          createdAt: Date.now()
+        });
+        await batch.commit();
+        showToast('Belanja lama dihapus & nilai stok dikonversi ke Modal Barang agar Neraca tetap seimbang.');
+      }
+      return;
+    }
+
+    if (t.type === 'stock_out' && t.fruitId && Number(t.qty || 0) > 0) {
+      const f = fruits.find((item) => item.id === t.fruitId);
+      if (f) {
+        batch.update(storeDoc('fruits', f.id), {
+          stock: Number((Number(f.stock || 0) + Number(t.qty || 0)).toFixed(3))
+        });
+      }
+      await batch.commit();
+      showToast('Riwayat Out Stok dihapus & stok buah dikembalikan!');
+      return;
+    }
+
     await batch.commit();
-    showToast(t.orderId ? 'Catatan kas dihapus & order dikembalikan ke Piutang.' : 'Transaksi kas dihapus!');
+    showToast('Transaksi berhasil dihapus!');
   };
 
   const saveFinanceForm = async (e) => {
@@ -1885,7 +1943,7 @@ ${banksText}`,
                             </div>
                             <div className="text-right shrink-0">
                               <strong className="text-rose-500 block">-{formatRp(t.amount)}</strong>
-                              <button onClick={() => deleteDoc(storeDoc('transactions', t.id))} className="text-[10px] text-rose-500 font-bold">
+                              <button onClick={() => handleDeleteTransaction(t)} className="text-[10px] text-rose-500 font-bold">
                                 Hapus
                               </button>
                             </div>
@@ -2379,7 +2437,7 @@ ${banksText}`,
                             </div>
                             <div className="text-right shrink-0">
                               <strong className="text-sm font-extrabold text-emerald-500 block">{formatRp(t.amount)}</strong>
-                              <button onClick={() => deleteDoc(storeDoc('transactions', t.id))} className="text-[10px] text-rose-500 font-bold">
+                              <button onClick={() => handleDeleteTransaction(t)} className="text-[10px] text-rose-500 font-bold">
                                 Hapus
                               </button>
                             </div>
@@ -2532,7 +2590,7 @@ ${banksText}`,
                               Edit
                             </button>
                             <button
-                              onClick={() => handleDeleteCashflowTrx(t)}
+                              onClick={() => handleDeleteTransaction(t)}
                               className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-500 text-[10px] font-bold"
                             >
                               Hapus
@@ -2570,7 +2628,7 @@ ${banksText}`,
                                 Edit
                               </button>
                               <button
-                                onClick={() => handleDeleteCashflowTrx(t)}
+                                onClick={() => handleDeleteTransaction(t)}
                                 className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-500 text-[10px] font-bold"
                               >
                                 Hapus
