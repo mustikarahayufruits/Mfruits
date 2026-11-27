@@ -42,7 +42,7 @@ const APP_ID = 'buahsegar-mobile-v1';
 const UNIT_OPTIONS = ['kg', 'pack', '500gr', 'pcs', 'box', 'ikat'];
 
 // ============================================================================
-// 2. HELPER TANGGAL, FORMAT RUPIAH & FILTER PERIODE
+// 2. HELPER TANGGAL, FORMAT RUPIAH, KONVERSI GRAM & FILTER PERIODE
 // ============================================================================
 function getTodayDateStr() {
   const d = new Date();
@@ -54,6 +54,17 @@ function getTodayDateStr() {
 
 function formatRp(num) {
   return 'Rp ' + Math.round(Number(num || 0)).toLocaleString('id-ID');
+}
+
+function formatWeightDetail(qty, unit) {
+  const val = Number(qty || 0);
+  if ((unit || '').toLowerCase() !== 'kg' || val <= 0) return '';
+  const totalGrams = Math.round(val * 1000);
+  const kgPart = Math.floor(totalGrams / 1000);
+  const grPart = totalGrams % 1000;
+  if (kgPart === 0) return `= ${grPart.toLocaleString('id-ID')} gram`;
+  if (grPart === 0) return `= ${kgPart} kg pas (${totalGrams.toLocaleString('id-ID')} gr)`;
+  return `= ${kgPart} kg ${grPart} gr (${totalGrams.toLocaleString('id-ID')} gr)`;
 }
 
 function isDateInPeriod(dateStr, period) {
@@ -216,6 +227,7 @@ export default function App() {
 
   // Firestore collections
   const [fruits, setFruits] = useState([]);
+  const [bundles, setBundles] = useState([]); // Katalog Produk Paket Bundling
   const [orders, setOrders] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
@@ -249,10 +261,21 @@ export default function App() {
   });
   const [toastMsg, setToastMsg] = useState('');
 
-  // Modal states
+  // Modal Tambah/Edit Buah
   const [fruitModalOpen, setFruitModalOpen] = useState(false);
   const [fruitForm, setFruitForm] = useState({ id: '', name: '', unit: 'kg', stock: 0, buyPrice: '', sellPrice: '', minStock: 1 });
 
+  // Modal Tambah/Edit Master Paket Bundling
+  const [bundleCatalogModalOpen, setBundleCatalogModalOpen] = useState(false);
+  const [bundleCatalogForm, setBundleCatalogForm] = useState({
+    id: '',
+    name: '',
+    sellPrice: '',
+    desc: '',
+    items: []
+  });
+
+  // Modal Belanja Stok Multi-Item
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkDate, setBulkDate] = useState(getTodayDateStr());
   const [bulkNote, setBulkNote] = useState('');
@@ -268,14 +291,16 @@ export default function App() {
     note: ''
   });
 
+  // Modal Order (Order Satuan Multi-Buah vs Order Bundling dari Katalog)
   const [orderSheetOpen, setOrderSheetOpen] = useState(false);
-  const [orderMode, setOrderMode] = useState('single');
+  const [orderMode, setOrderMode] = useState('single'); // 'single' (eceran multi-buah) | 'bundle' (dari katalog bundling)
   const [orderCustomer, setOrderCustomer] = useState('');
   const [orderStatus, setOrderStatus] = useState('confirmed');
-  const [orderMult, setOrderMult] = useState(1);
   const [orderCustomSell, setOrderCustomSell] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
-  const [bundleItems, setBundleItems] = useState([]);
+  const [singleOrderItems, setSingleOrderItems] = useState([]);
+  const [selectedBundleId, setSelectedBundleId] = useState('');
+  const [bundleOrderQty, setBundleOrderQty] = useState(1);
 
   // Modal Selesaikan Order + Metode Bayar (Transfer / Cash)
   const [completeOrderTarget, setCompleteOrderTarget] = useState(null);
@@ -374,6 +399,12 @@ export default function App() {
       (err) => setDbError('Izin Firestore ditolak: ' + err.message)
     );
 
+    const unsubBundles = onSnapshot(collection(db, `${base}/bundles`), (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      setBundles(list);
+    });
+
     const unsubOrders = onSnapshot(collection(db, `${base}/orders`), (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -392,6 +423,7 @@ export default function App() {
 
     return () => {
       unsubFruits();
+      unsubBundles();
       unsubOrders();
       unsubBanks();
       unsubTrx();
@@ -414,20 +446,21 @@ export default function App() {
         (o.items || []).forEach((it) => {
           const key = `${(it.fruitName || '').trim().toLowerCase()}|${(it.unit || '').trim().toLowerCase()}`;
           if (!demandMap[key]) demandMap[key] = { fruitName: it.fruitName, unit: it.unit, needed: 0 };
-          demandMap[key].needed += Number(it.qty || 0);
+          demandMap[key].needed = Number((demandMap[key].needed + Number(it.qty || 0)).toFixed(3));
         });
       });
 
     const shoppingList = Object.values(demandMap)
       .map((d) => {
-        const fruit = fruits.find(
-          (f) =>
-            f.name.trim().toLowerCase() === d.fruitName.trim().toLowerCase() &&
-            (f.unit || '').trim().toLowerCase() === (d.unit || '').trim().toLowerCase()
-        ) || fruits.find((f) => f.name.trim().toLowerCase() === d.fruitName.trim().toLowerCase());
+        const fruit =
+          fruits.find(
+            (f) =>
+              f.name.trim().toLowerCase() === d.fruitName.trim().toLowerCase() &&
+              (f.unit || '').trim().toLowerCase() === (d.unit || '').trim().toLowerCase()
+          ) || fruits.find((f) => f.name.trim().toLowerCase() === d.fruitName.trim().toLowerCase());
         const stock = fruit ? Number(fruit.stock) : 0;
         const buyPrice = fruit ? Number(fruit.buyPrice) : 0;
-        const deficit = Math.max(0, Number((d.needed - stock).toFixed(2)));
+        const deficit = Math.max(0, Number((d.needed - stock).toFixed(3)));
         return {
           fruitId: fruit ? fruit.id : null,
           fruitName: d.fruitName,
@@ -456,12 +489,12 @@ export default function App() {
   }, [fruits, orders, transactions]);
 
   // ==========================================================================
-  // 7. AKSI STOK, BELANJA & OUT STOCK NON-PENJUALAN
+  // 7. AKSI STOK, KATALOG BUNDLING, BELANJA & OUT STOCK
   // ==========================================================================
   const adjustStock = async (fruitId, delta, recordPurchase) => {
     const f = fruits.find((item) => item.id === fruitId);
     if (!f || !user) return;
-    const newStock = Math.max(0, Number((Number(f.stock) + delta).toFixed(2)));
+    const newStock = Math.max(0, Number((Number(f.stock) + delta).toFixed(3)));
     await updateDoc(storeDoc('fruits', fruitId), { stock: newStock });
 
     if (recordPurchase && delta > 0) {
@@ -489,9 +522,9 @@ export default function App() {
     metrics.shoppingList.forEach((item) => {
       const fruit = fruits.find((f) => f.id === item.fruitId);
       if (fruit) {
-        const qty = Math.ceil(item.deficit * 2) / 2;
+        const qty = fruit.unit === 'kg' ? Number(item.deficit.toFixed(2)) : Math.ceil(item.deficit);
         batch.update(storeDoc('fruits', fruit.id), {
-          stock: Number((Number(fruit.stock) + qty).toFixed(2))
+          stock: Number((Number(fruit.stock) + qty).toFixed(3))
         });
         totalSpent += qty * Number(fruit.buyPrice);
       }
@@ -513,14 +546,22 @@ export default function App() {
     showToast(`Semua belanja dibeli! Persediaan +${formatRp(totalSpent)}`);
   };
 
+  // Template Salin WA Daftar Belanja Supplier (dengan jeda baris rapi)
   const copyShoppingListWA = () => {
     if (metrics.shoppingList.length === 0) return showToast('Tidak ada daftar belanja yang kurang.');
-    const lines = [
+    const itemsLines = metrics.shoppingList
+      .map((it, i) => `${i + 1}. ${it.fruitName} — *${it.deficit} ${it.unit}*\n    (Est. ${formatRp(it.estCost)})`)
+      .join('\n\n');
+
+    const msg = [
       '*DAFTAR BELANJA BUAH SUPPLIER — MFRUITS*',
-      ...metrics.shoppingList.map((it, i) => `${i + 1}. ${it.fruitName}: *${it.deficit} ${it.unit}* (Est. ${formatRp(it.estCost)})`),
-      `*Total Estimasi:* ${formatRp(metrics.totalShoppingCost)}`
-    ];
-    copyTextSafe(lines.join('\n'), 'Daftar belanja disalin untuk WhatsApp!');
+      '',
+      itemsLines,
+      '',
+      `*Total Estimasi Belanja:* ${formatRp(metrics.totalShoppingCost)}`
+    ].join('\n');
+
+    copyTextSafe(msg, 'Daftar belanja disalin untuk WhatsApp!');
   };
 
   const openFruitModal = (fruit) => {
@@ -555,7 +596,83 @@ export default function App() {
     showToast('Item buah dihapus.');
   };
 
-  // Buka Modal Out Stock Non-Penjualan
+  // Master Katalog Paket Bundling
+  const openBundleCatalogModal = (bundle) => {
+    if (bundle) {
+      setBundleCatalogForm({
+        id: bundle.id,
+        name: bundle.name,
+        sellPrice: bundle.sellPrice,
+        desc: bundle.desc || '',
+        items: bundle.items ? bundle.items.map((it) => ({ ...it })) : []
+      });
+    } else {
+      const first = fruits[0];
+      setBundleCatalogForm({
+        id: '',
+        name: '',
+        sellPrice: '',
+        desc: '',
+        items: first
+          ? [
+              {
+                fruitId: first.id,
+                fruitName: first.name,
+                qty: first.unit === 'kg' ? 0.5 : 1,
+                unit: first.unit,
+                buyPrice: first.buyPrice,
+                sellPrice: first.sellPrice
+              }
+            ]
+          : []
+      });
+    }
+    setBundleCatalogModalOpen(true);
+  };
+
+  const bundleCatalogModalCost = useMemo(() => {
+    return (bundleCatalogForm.items || []).reduce((s, it) => {
+      const liveFruit = fruits.find((f) => f.id === it.fruitId);
+      const buy = liveFruit ? Number(liveFruit.buyPrice) : Number(it.buyPrice || 0);
+      return s + Number(it.qty || 0) * buy;
+    }, 0);
+  }, [bundleCatalogForm.items, fruits]);
+
+  const saveBundleCatalogForm = async (e) => {
+    e.preventDefault();
+    if (!user || bundleCatalogForm.items.length === 0) return;
+    const id = bundleCatalogForm.id || 'bnd_' + Date.now();
+    const normalizedItems = bundleCatalogForm.items.map((it) => {
+      const liveFruit = fruits.find((f) => f.id === it.fruitId);
+      return {
+        fruitId: it.fruitId,
+        fruitName: liveFruit ? liveFruit.name : it.fruitName,
+        qty: Number(it.qty) || 0,
+        unit: liveFruit ? liveFruit.unit : it.unit,
+        buyPrice: liveFruit ? Number(liveFruit.buyPrice) : Number(it.buyPrice || 0),
+        sellPrice: liveFruit ? Number(liveFruit.sellPrice) : Number(it.sellPrice || 0)
+      };
+    });
+
+    await setDoc(storeDoc('bundles', id), {
+      id,
+      name: bundleCatalogForm.name.trim(),
+      sellPrice: Number(bundleCatalogForm.sellPrice) || 0,
+      desc: bundleCatalogForm.desc.trim(),
+      items: normalizedItems,
+      createdAt: bundleCatalogForm.id ? Date.now() : Date.now()
+    });
+    setBundleCatalogModalOpen(false);
+    showToast(bundleCatalogForm.id ? 'Paket bundling diperbarui!' : 'Produk bundling baru disimpan!');
+  };
+
+  const deleteBundleCatalog = async (bundleId) => {
+    if (!user) return;
+    await deleteDoc(storeDoc('bundles', bundleId));
+    showToast('Produk bundling dihapus.');
+  };
+
+  // Out Stock Non-Penjualan
   const openOutStockModal = () => {
     const available = fruits.filter((f) => Number(f.stock) > 0);
     const first = available[0] || fruits[0];
@@ -585,7 +702,7 @@ export default function App() {
     const batch = writeBatch(db);
 
     batch.update(storeDoc('fruits', fruit.id), {
-      stock: Math.max(0, Number((Number(fruit.stock) - qty).toFixed(2)))
+      stock: Math.max(0, Number((Number(fruit.stock) - qty).toFixed(3)))
     });
 
     const tId = 'out_' + Date.now();
@@ -654,7 +771,7 @@ export default function App() {
 
         if (existing) {
           batch.update(storeDoc('fruits', existing.id), {
-            stock: Number((Number(existing.stock) + qty).toFixed(2)),
+            stock: Number((Number(existing.stock) + qty).toFixed(3)),
             ...(buyPrice > 0 ? { buyPrice } : {}),
             ...(r.sellPrice !== '' && Number(r.sellPrice) > 0 ? { sellPrice: Number(r.sellPrice) } : {})
           });
@@ -677,7 +794,7 @@ export default function App() {
         const found = fruits.find((f) => f.id === r.fruitId);
         if (found) {
           batch.update(storeDoc('fruits', found.id), {
-            stock: Number((Number(found.stock) + qty).toFixed(2)),
+            stock: Number((Number(found.stock) + qty).toFixed(3)),
             ...(buyPrice > 0 ? { buyPrice } : {}),
             ...(r.sellPrice !== '' && Number(r.sellPrice) > 0 ? { sellPrice: Number(r.sellPrice) } : {})
           });
@@ -708,92 +825,149 @@ export default function App() {
   };
 
   // ==========================================================================
-  // 8. ORDER, KALKULATOR BUNDLING & PENYELESAIAN (TRANSFER / CASH)
+  // 8. ORDER SATUAN (MULTI-BUAH) VS ORDER BUNDLING (DARI KATALOG)
   // ==========================================================================
   const openOrderSheet = (mode) => {
-    const first = fruits[0];
+    const firstFruit = fruits[0];
+    const firstBundle = bundles[0];
     setOrderMode(mode);
-    setBundleItems(
-      first
+    setSingleOrderItems(
+      firstFruit
         ? [
             {
-              fruitId: first.id,
-              fruitName: first.name,
-              qty: mode === 'single' ? 1 : first.unit === 'kg' ? 0.5 : 1,
-              unit: first.unit,
-              buyPrice: first.buyPrice,
-              sellPrice: first.sellPrice
+              fruitId: firstFruit.id,
+              fruitName: firstFruit.name,
+              qty: 1,
+              unit: firstFruit.unit,
+              buyPrice: firstFruit.buyPrice,
+              sellPrice: firstFruit.sellPrice
             }
           ]
         : []
     );
+    setSelectedBundleId(firstBundle ? firstBundle.id : '');
+    setBundleOrderQty(1);
     setOrderCustomer('');
     setOrderStatus('confirmed');
-    setOrderMult(1);
     setOrderCustomSell('');
     setOrderNotes('');
     setOrderSheetOpen(true);
   };
 
+  const activeSelectedBundle = useMemo(
+    () => bundles.find((b) => b.id === selectedBundleId) || null,
+    [bundles, selectedBundleId]
+  );
+
   const orderCalc = useMemo(() => {
-    const mult = Number(orderMult) || 1;
-    const baseCost = bundleItems.reduce((s, it) => s + Number(it.qty || 0) * Number(it.buyPrice || 0), 0);
-    const baseSell = bundleItems.reduce((s, it) => s + Number(it.qty || 0) * Number(it.sellPrice || 0), 0);
-    const totalCost = baseCost * mult;
-    const finalSell = orderCustomSell !== '' ? Number(orderCustomSell) : baseSell * mult;
-    return { mult, totalCost, finalSell, profit: finalSell - totalCost };
-  }, [bundleItems, orderMult, orderCustomSell]);
+    if (orderMode === 'single') {
+      const totalCost = singleOrderItems.reduce(
+        (s, it) => s + Number(it.qty || 0) * Number(it.buyPrice || 0),
+        0
+      );
+      const baseSell = singleOrderItems.reduce(
+        (s, it) => s + Number(it.qty || 0) * Number(it.sellPrice || 0),
+        0
+      );
+      const finalSell = orderCustomSell !== '' ? Number(orderCustomSell) : baseSell;
+      return { totalCost, finalSell, profit: finalSell - totalCost };
+    } else {
+      if (!activeSelectedBundle) return { totalCost: 0, finalSell: 0, profit: 0 };
+      const mult = Number(bundleOrderQty) || 1;
+      const unitCost = (activeSelectedBundle.items || []).reduce((s, it) => {
+        const liveFruit = fruits.find((f) => f.id === it.fruitId);
+        const buy = liveFruit ? Number(liveFruit.buyPrice) : Number(it.buyPrice || 0);
+        return s + Number(it.qty || 0) * buy;
+      }, 0);
+      const totalCost = unitCost * mult;
+      const baseSell = Number(activeSelectedBundle.sellPrice || 0) * mult;
+      const finalSell = orderCustomSell !== '' ? Number(orderCustomSell) : baseSell;
+      return { totalCost, finalSell, profit: finalSell - totalCost };
+    }
+  }, [orderMode, singleOrderItems, activeSelectedBundle, bundleOrderQty, orderCustomSell, fruits]);
 
   const saveOrderSheet = async (e) => {
     e.preventDefault();
-    if (!user || bundleItems.length === 0) return;
-    const items = bundleItems.map((it) => ({
-      ...it,
-      qty: Number((Number(it.qty) * orderCalc.mult).toFixed(2))
-    }));
-    const id = 'o_' + Date.now();
-    await setDoc(storeDoc('orders', id), {
-      id,
-      customer: orderCustomer.trim(),
-      status: orderStatus,
-      paymentStatus: 'unpaid',
-      notes: orderNotes.trim() || items.map((i) => `${i.fruitName} ${i.qty} ${i.unit}`).join(', '),
-      items,
-      totalCost: orderCalc.totalCost,
-      totalSell: orderCalc.finalSell,
-      createdAt: Date.now()
-    });
+    if (!user) return;
+
+    if (orderMode === 'single') {
+      if (singleOrderItems.length === 0) return;
+      const items = singleOrderItems.map((it) => ({
+        ...it,
+        qty: Number(Number(it.qty).toFixed(3))
+      }));
+      const id = 'o_' + Date.now();
+      await setDoc(storeDoc('orders', id), {
+        id,
+        orderType: 'single',
+        customer: orderCustomer.trim(),
+        status: orderStatus,
+        paymentStatus: 'unpaid',
+        notes: orderNotes.trim() || items.map((i) => `${i.fruitName} ${i.qty} ${i.unit}`).join(', '),
+        items,
+        totalCost: orderCalc.totalCost,
+        totalSell: orderCalc.finalSell,
+        createdAt: Date.now()
+      });
+    } else {
+      if (!activeSelectedBundle) return showToast('Pilih paket bundling terlebih dahulu.');
+      const mult = Number(bundleOrderQty) || 1;
+      const expandedItems = (activeSelectedBundle.items || []).map((it) => {
+        const liveFruit = fruits.find((f) => f.id === it.fruitId);
+        return {
+          fruitId: it.fruitId,
+          fruitName: liveFruit ? liveFruit.name : it.fruitName,
+          qty: Number((Number(it.qty || 0) * mult).toFixed(3)),
+          unit: liveFruit ? liveFruit.unit : it.unit,
+          buyPrice: liveFruit ? Number(liveFruit.buyPrice) : Number(it.buyPrice || 0),
+          sellPrice: liveFruit ? Number(liveFruit.sellPrice) : Number(it.sellPrice || 0)
+        };
+      });
+      const bundleLabel = `${activeSelectedBundle.name} (${mult} paket)`;
+      const id = 'o_' + Date.now();
+      await setDoc(storeDoc('orders', id), {
+        id,
+        orderType: 'bundle',
+        bundleName: activeSelectedBundle.name,
+        bundleQty: mult,
+        customer: orderCustomer.trim(),
+        status: orderStatus,
+        paymentStatus: 'unpaid',
+        notes: orderNotes.trim() ? `${bundleLabel} • ${orderNotes.trim()}` : bundleLabel,
+        items: expandedItems,
+        totalCost: orderCalc.totalCost,
+        totalSell: orderCalc.finalSell,
+        createdAt: Date.now()
+      });
+    }
+
     setOrderSheetOpen(false);
     showToast('Order baru berhasil dicatat!');
   };
 
+  // Template Salin WA Rincian Pembayaran Pelanggan (dengan jeda baris rapi)
   const copyOrderPaymentWA = (o) => {
     const itemsText =
       o.items && o.items.length > 0
-        ? o.items.map((it, idx) => `${idx + 1}. ${it.fruitName} (${it.qty} ${it.unit})`).join('\n')
+        ? o.items.map((it, idx) => `${idx + 1}. ${it.fruitName} — ${it.qty} ${it.unit}`).join('\n')
         : o.notes || '-';
+
     const banksText =
       bankAccounts.length > 0
-        ? bankAccounts.map((b) => `• *${b.bank}*: ${b.number} (a.n. ${b.holder})`).join('\n')
+        ? bankAccounts.map((b) => `• *${b.bank}*: ${b.number}\n  a.n. ${b.holder}`).join('\n\n')
         : '• (Belum ada rekening tersimpan)';
 
-    const msg = [
+    const sections = [
       `Halo Kak *${o.customer}*, berikut rincian pesanan buahnya di *MFruits* ya:`,
-      '',
-      itemsText,
-      o.notes ? `_Catatan: ${o.notes}_` : '',
-      '',
-      `*Total Pembayaran: ${formatRp(o.totalSell)}*`,
-      '',
-      'Pembayaran bisa melalui Cash atau transfer ke rekening berikut:',
-      banksText,
-      '',
-      'Terima kasih sudah berbelanja di *MFruits*!'
-    ]
-      .filter((line) => line !== '')
-      .join('\n');
+      o.orderType === 'bundle' && o.bundleName ? `*Paket:* ${o.bundleName} (${o.bundleQty || 1} paket)` : null,
+      `*Daftar Buah:*\n${itemsText}`,
+      o.notes ? `_Catatan: ${o.notes}_` : null,
+      `*Total Pembayaran:*\n*${formatRp(o.totalSell)}*`,
+      `Pembayaran bisa melalui Cash atau transfer ke rekening berikut:\n\n${banksText}`,
+      'Terima kasih sudah berbelanja di *MFruits*! 🍎🍊'
+    ].filter(Boolean);
 
-    copyTextSafe(msg, 'Rincian pesanan & info pembayaran disalin untuk WA!');
+    copyTextSafe(sections.join('\n\n'), 'Rincian pesanan & info pembayaran disalin untuk WA!');
   };
 
   const confirmCompleteOrder = async (payStatus) => {
@@ -802,11 +976,12 @@ export default function App() {
     const batch = writeBatch(db);
 
     (o.items || []).forEach((it) => {
-      const f = fruits.find((item) => item.id === it.fruitId) ||
+      const f =
+        fruits.find((item) => item.id === it.fruitId) ||
         fruits.find((item) => item.name.trim().toLowerCase() === it.fruitName.trim().toLowerCase());
       if (f) {
         batch.update(storeDoc('fruits', f.id), {
-          stock: Math.max(0, Number((Number(f.stock) - Number(it.qty)).toFixed(2)))
+          stock: Math.max(0, Number((Number(f.stock) - Number(it.qty)).toFixed(3)))
         });
       }
     });
@@ -930,7 +1105,7 @@ export default function App() {
         if (!map[key]) {
           map[key] = { fruitName: it.fruitName, unit: it.unit || '', totalQty: 0, totalModal: 0, trxCount: 0 };
         }
-        map[key].totalQty = Number((map[key].totalQty + Number(it.qty || 0)).toFixed(2));
+        map[key].totalQty = Number((map[key].totalQty + Number(it.qty || 0)).toFixed(3));
         map[key].totalModal += Number(it.qty || 0) * Number(it.buyPrice || 0);
         map[key].trxCount += 1;
       });
@@ -1236,7 +1411,10 @@ export default function App() {
                           </span>
                         </div>
                         <button
-                          onClick={() => item.fruitId && adjustStock(item.fruitId, Math.ceil(item.deficit * 2) / 2, true)}
+                          onClick={() =>
+                            item.fruitId &&
+                            adjustStock(item.fruitId, item.unit === 'kg' ? Number(item.deficit.toFixed(2)) : Math.ceil(item.deficit), true)
+                          }
                           style={{ backgroundColor: 'var(--accent)' }}
                           className="px-2.5 py-1.5 rounded-xl text-white text-[11px] font-bold shrink-0"
                         >
@@ -1300,41 +1478,53 @@ export default function App() {
             </section>
           )}
 
-          {/* ================= VIEW 2: STOK BUAH ================= */}
+          {/* ================= VIEW 2: STOK BUAH & KATALOG PAKET BUNDLING ================= */}
           {currentView === 'stock' && (
             <section className="space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <h2 className="text-base font-extrabold">Stok Buah MFruits</h2>
-                  <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Kelola persediaan, belanja & out stok</p>
+                  <h2 className="text-base font-extrabold">Stok & Paket Bundling</h2>
+                  <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Kelola stok buah & katalog produk bundling</p>
                 </div>
-                <div className="flex items-center gap-1.5">
+                {stockFilter === 'bundles' ? (
                   <button
-                    onClick={openOutStockModal}
-                    className="px-2.5 py-2 rounded-xl bg-rose-500/15 text-rose-500 text-xs font-extrabold"
-                  >
-                    - Out Stok
-                  </button>
-                  <button
-                    onClick={openBulkRestockModal}
-                    style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }}
-                    className="px-2.5 py-2 rounded-xl text-xs font-extrabold"
-                  >
-                    + Belanja
-                  </button>
-                  <button
-                    onClick={() => openFruitModal(null)}
+                    onClick={() => openBundleCatalogModal(null)}
                     style={{ backgroundColor: 'var(--accent)' }}
-                    className="px-2.5 py-2 rounded-xl text-white text-xs font-bold"
+                    className="px-3 py-2 rounded-xl text-white text-xs font-extrabold shadow-xs"
                   >
-                    + Buah
+                    + Buat Paket Bundling
                   </button>
-                </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={openOutStockModal}
+                      className="px-2.5 py-2 rounded-xl bg-rose-500/15 text-rose-500 text-xs font-extrabold"
+                    >
+                      - Out Stok
+                    </button>
+                    <button
+                      onClick={openBulkRestockModal}
+                      style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }}
+                      className="px-2.5 py-2 rounded-xl text-xs font-extrabold"
+                    >
+                      + Belanja
+                    </button>
+                    <button
+                      onClick={() => openFruitModal(null)}
+                      style={{ backgroundColor: 'var(--accent)' }}
+                      className="px-2.5 py-2 rounded-xl text-white text-xs font-bold"
+                    >
+                      + Buah
+                    </button>
+                  </div>
+                )}
               </div>
 
-              <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-bold">
+              {/* Filter Tabs termasuk Katalog Paket Bundling */}
+              <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-bold pb-0.5">
                 {[
-                  { id: 'all', label: 'Semua' },
+                  { id: 'all', label: `Semua Buah (${fruits.length})` },
+                  { id: 'bundles', label: `Paket Bundling (${bundles.length})` },
                   { id: 'low', label: 'Habis / Menipis' },
                   { id: 'ready', label: 'Stok Aman' },
                   { id: 'out_history', label: `Riwayat Out (${stockOutHistory.length})` }
@@ -1354,7 +1544,66 @@ export default function App() {
                 ))}
               </div>
 
-              {stockFilter === 'out_history' ? (
+              {/* SUB-VIEW A: KATALOG PRODUK PAKET BUNDLING */}
+              {stockFilter === 'bundles' ? (
+                <div className="space-y-2.5">
+                  {bundles.length === 0 ? (
+                    <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs space-y-2">
+                      <p>Belum ada produk <b>Paket Bundling</b> yang dibuat.</p>
+                      <p className="text-[11px]">Buat produk bundling terlebih dahulu (misal: <i>Paket Parsel Sehat</i>) agar bisa langsung dipilih saat mencatat Order Bundling.</p>
+                    </div>
+                  ) : (
+                    bundles.map((b) => {
+                      const unitCost = (b.items || []).reduce((s, it) => {
+                        const liveF = fruits.find((f) => f.id === it.fruitId);
+                        const buy = liveF ? Number(liveF.buyPrice) : Number(it.buyPrice || 0);
+                        return s + Number(it.qty || 0) * buy;
+                      }, 0);
+                      const estProfit = Number(b.sellPrice || 0) - unitCost;
+
+                      return (
+                        <div key={b.id} style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)' }} className="border rounded-2xl p-3.5 space-y-2.5 text-xs">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent-text)' }} className="px-2 py-0.5 rounded text-[9px] font-extrabold uppercase">
+                                  PRODUK BUNDLING
+                                </span>
+                                <strong className="text-sm font-extrabold">{b.name}</strong>
+                              </div>
+                              {b.desc && <p style={{ color: 'var(--text-muted)' }} className="text-[11px] mt-0.5">{b.desc}</p>}
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button onClick={() => openBundleCatalogModal(b)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="px-2 py-1 rounded-lg text-[11px] font-bold">
+                                Edit
+                              </button>
+                              <button onClick={() => deleteBundleCatalog(b.id)} className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 text-[11px] font-bold">
+                                Hapus
+                              </button>
+                            </div>
+                          </div>
+
+                          <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl space-y-1">
+                            <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold uppercase block">Isi Komposisi per 1 Paket:</span>
+                            {(b.items || []).map((it, idx) => (
+                              <div key={idx} className="flex justify-between text-[11px]">
+                                <span>• {it.fruitName}</span>
+                                <strong>{it.qty} {it.unit}</strong>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div style={{ borderColor: 'var(--border-color)' }} className="flex items-center justify-between pt-2 border-t text-[11px]">
+                            <span style={{ color: 'var(--text-muted)' }}>Modal Paket: <b>{formatRp(unitCost)}</b></span>
+                            <span>Jual: <b className="text-emerald-500">{formatRp(b.sellPrice)}</b> (<b className="text-teal-500">+{formatRp(estProfit)}</b>)</span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              ) : stockFilter === 'out_history' ? (
+                /* SUB-VIEW B: RIWAYAT OUT STOCK NON-PENJUALAN */
                 <div className="space-y-2.5">
                   {stockOutHistory.length === 0 ? (
                     <div style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }} className="border rounded-2xl p-6 text-center text-xs">
@@ -1387,6 +1636,7 @@ export default function App() {
                   Belum ada data stok buah. Tekan <b>+ Belanja</b> atau <b>+ Buah</b> untuk mulai mengisi.
                 </div>
               ) : (
+                /* SUB-VIEW C: DAFTAR STOK BUAH */
                 <div className="space-y-2.5">
                   {fruits
                     .filter((f) =>
@@ -1428,16 +1678,23 @@ export default function App() {
                             </div>
                           </div>
                           <div style={{ borderColor: 'var(--border-color)' }} className="flex items-center justify-between pt-2 border-t">
-                            <span className={`text-xs font-extrabold ${empty ? 'text-rose-500' : ''}`}>
-                              Stok: {f.stock} {f.unit}
-                            </span>
+                            <div>
+                              <span className={`text-xs font-extrabold block ${empty ? 'text-rose-500' : ''}`}>
+                                Stok: {f.stock} {f.unit}
+                              </span>
+                              {f.unit === 'kg' && Number(f.stock) > 0 && (
+                                <span style={{ color: 'var(--text-muted)' }} className="text-[10px]">
+                                  {formatWeightDetail(f.stock, f.unit)}
+                                </span>
+                              )}
+                            </div>
                             <div className="flex items-center gap-1.5">
                               <button
-                                onClick={() => adjustStock(f.id, f.unit === 'kg' ? -0.5 : -1, false)}
+                                onClick={() => adjustStock(f.id, f.unit === 'kg' ? -0.25 : -1, false)}
                                 style={{ backgroundColor: 'var(--bg-card-sub)' }}
                                 className="px-2.5 h-8 rounded-xl font-extrabold text-xs"
                               >
-                                {f.unit === 'kg' ? '-0.5' : '-1'}
+                                {f.unit === 'kg' ? '-0.25' : '-1'}
                               </button>
                               <button
                                 onClick={() => adjustStock(f.id, 1, true)}
@@ -1462,14 +1719,14 @@ export default function App() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <h2 className="text-base font-extrabold">Order & Request Pelanggan</h2>
-                  <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Racik bundling & selesaikan pesanan</p>
+                  <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Order satuan multi-buah & paket bundling</p>
                 </div>
                 <button
                   onClick={() => openOrderSheet('bundle')}
                   style={{ backgroundColor: 'var(--accent)' }}
                   className="px-3 py-2 rounded-xl text-white text-xs font-bold"
                 >
-                  + Kalkulator
+                  + Order Bundling
                 </button>
               </div>
 
@@ -1502,7 +1759,10 @@ export default function App() {
                                     : 'bg-emerald-500/15 text-emerald-500'
                                 }`}
                               >
-                                {isDone ? 'Selesai' : isReq ? 'Request Paket' : 'Pesanan Pasti'}
+                                {isDone ? 'Selesai' : isReq ? 'Request' : 'Pesanan Pasti'}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-500/15 text-indigo-400">
+                                {o.orderType === 'bundle' ? 'BUNDLING' : 'SATUAN'}
                               </span>
                               {isDone && (
                                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold text-white ${o.paymentStatus === 'paid' ? 'bg-emerald-600' : 'bg-amber-500'}`}>
@@ -2079,17 +2339,22 @@ export default function App() {
                     )}
                   </div>
                   <div>
-                    <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Stok Saat Ini</label>
+                    <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Stok Saat Ini ({fruitForm.unit || 'kg'})</label>
                     <input
                       required
                       type="number"
-                      step="0.1"
-                      placeholder="Stok"
+                      step="0.01"
+                      placeholder="Stok (misal: 1.25)"
                       value={fruitForm.stock}
                       onChange={(e) => setFruitForm({ ...fruitForm, stock: e.target.value })}
                       style={{ backgroundColor: 'var(--bg-card-sub)' }}
                       className="w-full px-3 py-2.5 rounded-xl font-bold outline-none"
                     />
+                    {fruitForm.unit === 'kg' && Number(fruitForm.stock) > 0 && (
+                      <span className="text-[10px] text-emerald-500 font-semibold block mt-1">
+                        {formatWeightDetail(fruitForm.stock, 'kg')}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -2106,6 +2371,186 @@ export default function App() {
 
                 <button type="submit" style={{ backgroundColor: 'var(--accent)' }} className="w-full py-3 rounded-xl text-white font-extrabold">
                   Simpan Data Buah
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ================= MODAL BARU: BUAT / EDIT PRODUK PAKET BUNDLING ================= */}
+        {bundleCatalogModalOpen && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center">
+            <div style={{ backgroundColor: 'var(--bg-card)' }} className="w-full max-w-[440px] max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl p-5 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-extrabold text-base">{bundleCatalogForm.id ? 'Edit Paket Bundling' : 'Buat Produk Paket Bundling'}</h3>
+                  <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">Simpan template paket agar siap dipilih saat Order Bundling</p>
+                </div>
+                <button onClick={() => setBundleCatalogModalOpen(false)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
+              </div>
+
+              <form onSubmit={saveBundleCatalogForm} className="space-y-3 text-xs">
+                <div>
+                  <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Nama Produk Paket Bundling</label>
+                  <input
+                    required
+                    placeholder="Contoh: Paket Parsel Sehat A / Hampers Buah"
+                    value={bundleCatalogForm.name}
+                    onChange={(e) => setBundleCatalogForm({ ...bundleCatalogForm, name: e.target.value })}
+                    style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                    className="w-full px-3 py-2.5 rounded-xl font-bold outline-none"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold">Komposisi Buah per 1 Paket</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const f = fruits[0];
+                        if (!f) return showToast('Tambahkan data buah di Stok terlebih dahulu.');
+                        setBundleCatalogForm({
+                          ...bundleCatalogForm,
+                          items: [
+                            ...bundleCatalogForm.items,
+                            {
+                              fruitId: f.id,
+                              fruitName: f.name,
+                              qty: f.unit === 'kg' ? 0.5 : 1,
+                              unit: f.unit,
+                              buyPrice: f.buyPrice,
+                              sellPrice: f.sellPrice
+                            }
+                          ]
+                        });
+                      }}
+                      className="text-emerald-500 font-extrabold"
+                    >
+                      + Tambah Buah
+                    </button>
+                  </div>
+
+                  {bundleCatalogForm.items.map((it, idx) => (
+                    <div key={idx} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl space-y-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          value={it.fruitId}
+                          onChange={(e) => {
+                            const f = fruits.find((item) => item.id === e.target.value);
+                            if (!f) return;
+                            const copy = [...bundleCatalogForm.items];
+                            copy[idx] = {
+                              fruitId: f.id,
+                              fruitName: f.name,
+                              qty: copy[idx].qty,
+                              unit: f.unit,
+                              buyPrice: f.buyPrice,
+                              sellPrice: f.sellPrice
+                            };
+                            setBundleCatalogForm({ ...bundleCatalogForm, items: copy });
+                          }}
+                          style={{ backgroundColor: 'var(--bg-card)' }}
+                          className="flex-1 px-2 py-1.5 rounded-lg font-semibold outline-none"
+                        >
+                          {fruits.map((f) => (
+                            <option key={f.id} value={f.id}>{f.name} ({formatRp(f.buyPrice)}/{f.unit})</option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          required
+                          value={it.qty}
+                          onChange={(e) => {
+                            const copy = [...bundleCatalogForm.items];
+                            copy[idx].qty = Number(e.target.value) || 0;
+                            setBundleCatalogForm({ ...bundleCatalogForm, items: copy });
+                          }}
+                          style={{ backgroundColor: 'var(--bg-card)' }}
+                          className="w-20 px-2 py-1.5 rounded-lg text-center font-bold outline-none"
+                        />
+                        <span className="text-[11px] w-10 truncate font-semibold">{it.unit}</span>
+                        {bundleCatalogForm.items.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setBundleCatalogForm({
+                                ...bundleCatalogForm,
+                                items: bundleCatalogForm.items.filter((_, i) => i !== idx)
+                              })
+                            }
+                            className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 font-bold"
+                          >
+                            x
+                          </button>
+                        )}
+                      </div>
+                      {it.unit === 'kg' && Number(it.qty) > 0 && (
+                        <div className="flex items-center justify-between text-[10px] px-1">
+                          <span className="text-emerald-500 font-semibold">{formatWeightDetail(it.qty, 'kg')}</span>
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const copy = [...bundleCatalogForm.items];
+                                copy[idx].qty = Number((Number(copy[idx].qty || 0) + 0.25).toFixed(2));
+                                setBundleCatalogForm({ ...bundleCatalogForm, items: copy });
+                              }}
+                              style={{ backgroundColor: 'var(--bg-card)' }}
+                              className="px-1.5 py-0.5 rounded font-bold"
+                            >
+                              +250gr
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const copy = [...bundleCatalogForm.items];
+                                copy[idx].qty = Number((Number(copy[idx].qty || 0) + 0.5).toFixed(2));
+                                setBundleCatalogForm({ ...bundleCatalogForm, items: copy });
+                              }}
+                              style={{ backgroundColor: 'var(--bg-card)' }}
+                              className="px-1.5 py-0.5 rounded font-bold"
+                            >
+                              +500gr
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl">
+                    <span style={{ color: 'var(--text-muted)' }} className="text-[10px] block">Total Modal Isi Paket</span>
+                    <strong className="text-sm font-extrabold">{formatRp(bundleCatalogModalCost)}</strong>
+                  </div>
+                  <div>
+                    <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Harga Jual Paket (Rp)</label>
+                    <input
+                      type="number"
+                      required
+                      placeholder="Contoh: 85000"
+                      value={bundleCatalogForm.sellPrice}
+                      onChange={(e) => setBundleCatalogForm({ ...bundleCatalogForm, sellPrice: e.target.value })}
+                      style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                      className="w-full px-3 py-2 rounded-xl font-bold outline-none"
+                    />
+                  </div>
+                </div>
+
+                <input
+                  placeholder="Deskripsi / Kemasan (Contoh: Box mika + pita ucapan)"
+                  value={bundleCatalogForm.desc}
+                  onChange={(e) => setBundleCatalogForm({ ...bundleCatalogForm, desc: e.target.value })}
+                  style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                  className="w-full px-3 py-2.5 rounded-xl outline-none"
+                />
+
+                <button type="submit" style={{ backgroundColor: 'var(--accent)' }} className="w-full py-3 rounded-xl text-white font-extrabold">
+                  Simpan Produk Paket Bundling
                 </button>
               </form>
             </div>
@@ -2203,10 +2648,15 @@ export default function App() {
                     )}
 
                     <div className="grid grid-cols-3 gap-1.5">
-                      <input type="number" step="0.1" required placeholder={`Qty (${r.unit || 'kg'})`} value={r.qty} onChange={(e) => { const c = [...bulkRows]; c[idx].qty = e.target.value; setBulkRows(c); }} style={{ backgroundColor: 'var(--bg-card)' }} className="px-2.5 py-1.5 rounded-xl font-bold outline-none" />
+                      <input type="number" step="0.01" required placeholder={`Qty (${r.unit || 'kg'})`} value={r.qty} onChange={(e) => { const c = [...bulkRows]; c[idx].qty = e.target.value; setBulkRows(c); }} style={{ backgroundColor: 'var(--bg-card)' }} className="px-2.5 py-1.5 rounded-xl font-bold outline-none" />
                       <input type="number" required placeholder="Harga Beli" value={r.buyPrice} onChange={(e) => { const c = [...bulkRows]; c[idx].buyPrice = e.target.value; setBulkRows(c); }} style={{ backgroundColor: 'var(--bg-card)' }} className="px-2.5 py-1.5 rounded-xl font-bold outline-none" />
                       <input type="number" placeholder="Harga Jual" value={r.sellPrice} onChange={(e) => { const c = [...bulkRows]; c[idx].sellPrice = e.target.value; setBulkRows(c); }} style={{ backgroundColor: 'var(--bg-card)' }} className="px-2.5 py-1.5 rounded-xl font-bold outline-none" />
                     </div>
+                    {r.unit === 'kg' && Number(r.qty) > 0 && (
+                      <span className="text-[10px] text-emerald-500 font-semibold block">
+                        {formatWeightDetail(r.qty, 'kg')}
+                      </span>
+                    )}
                   </div>
                 ))}
 
@@ -2218,7 +2668,7 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= MODAL BARU: OUT STOCK NON-PENJUALAN ================= */}
+        {/* ================= MODAL OUT STOCK NON-PENJUALAN ================= */}
         {outStockModalOpen && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center">
             <div style={{ backgroundColor: 'var(--bg-card)' }} className="w-full max-w-[440px] rounded-t-3xl sm:rounded-3xl p-5 space-y-3.5">
@@ -2254,10 +2704,10 @@ export default function App() {
                     <label style={{ color: 'var(--text-muted)' }} className="font-bold block mb-1">Jumlah Keluar</label>
                     <input
                       type="number"
-                      step="0.1"
-                      min="0.1"
+                      step="0.01"
+                      min="0.01"
                       required
-                      placeholder="Misal: 1"
+                      placeholder="Misal: 0.35"
                       value={outStockForm.qty}
                       onChange={(e) => setOutStockForm({ ...outStockForm, qty: e.target.value })}
                       style={{ backgroundColor: 'var(--bg-card-sub)' }}
@@ -2322,117 +2772,274 @@ export default function App() {
           </div>
         )}
 
-        {/* ================= MODAL 3: ORDER / KALKULATOR BUNDLING ================= */}
+        {/* ================= MODAL 3: ORDER SATUAN (MULTI-BUAH) & ORDER BUNDLING ================= */}
         {orderSheetOpen && (
           <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center">
             <div style={{ backgroundColor: 'var(--bg-card)' }} className="w-full max-w-[440px] max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl p-5 space-y-3.5">
               <div className="flex items-center justify-between">
-                <h3 className="font-extrabold text-base">Buat Order / Paket Bundling</h3>
+                <h3 className="font-extrabold text-base">Catat Order Pelanggan</h3>
                 <button onClick={() => setOrderSheetOpen(false)} style={{ color: 'var(--text-muted)' }} className="text-xs font-bold">Tutup</button>
               </div>
 
+              {/* Switch Mode Order Satuan (Multi-Buah Non-Paket) vs Order Bundling (Produk Paket) */}
               <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="grid grid-cols-2 gap-1.5 p-1 rounded-xl text-xs font-bold">
-                <button type="button" onClick={() => { setOrderMode('single'); setBundleItems(bundleItems.slice(0, 1)); }} style={orderMode === 'single' ? { backgroundColor: 'var(--accent)', color: '#fff' } : {}} className="py-2 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOrderMode('single');
+                    setOrderCustomSell('');
+                  }}
+                  style={orderMode === 'single' ? { backgroundColor: 'var(--accent)', color: '#fff' } : {}}
+                  className="py-2 rounded-lg transition-all"
+                >
                   Order Satuan
                 </button>
-                <button type="button" onClick={() => setOrderMode('bundle')} style={orderMode === 'bundle' ? { backgroundColor: 'var(--accent)', color: '#fff' } : {}} className="py-2 rounded-lg">
-                  Kalkulator Bundling
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOrderMode('bundle');
+                    setOrderCustomSell('');
+                    if (!selectedBundleId && bundles[0]) setSelectedBundleId(bundles[0].id);
+                  }}
+                  style={orderMode === 'bundle' ? { backgroundColor: 'var(--accent)', color: '#fff' } : {}}
+                  className="py-2 rounded-lg transition-all"
+                >
+                  Order Bundling
                 </button>
               </div>
 
               <form onSubmit={saveOrderSheet} className="space-y-3 text-xs">
                 <div className="grid grid-cols-2 gap-2">
-                  <input required placeholder="Nama Pelanggan" value={orderCustomer} onChange={(e) => setOrderCustomer(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
-                  <select value={orderStatus} onChange={(e) => setOrderStatus(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none">
+                  <input required placeholder="Nama Pelanggan" value={orderCustomer} onChange={(e) => setOrderCustomer(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none font-semibold" />
+                  <select value={orderStatus} onChange={(e) => setOrderStatus(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none font-semibold">
                     <option value="confirmed">Pesanan Pasti (Deal)</option>
                     <option value="request">Masih Request</option>
                   </select>
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span className="font-bold">Daftar Buah</span>
-                    {orderMode === 'bundle' && (
+                {/* FORM MODE 1: ORDER SATUAN (BISA > 1 MACAM BUAH + INPUT GRAM DETAIL) */}
+                {orderMode === 'single' ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold">Daftar Buah Dibeli (Non-Paket)</span>
                       <button
                         type="button"
                         onClick={() => {
                           const f = fruits[0];
-                          if (f) {
-                            setBundleItems([
-                              ...bundleItems,
-                              {
-                                fruitId: f.id,
-                                fruitName: f.name,
-                                qty: f.unit === 'kg' ? 0.5 : 1,
-                                unit: f.unit,
-                                buyPrice: f.buyPrice,
-                                sellPrice: f.sellPrice
-                              }
-                            ]);
-                          }
+                          if (!f) return showToast('Belum ada data buah di Stok.');
+                          setSingleOrderItems([
+                            ...singleOrderItems,
+                            {
+                              fruitId: f.id,
+                              fruitName: f.name,
+                              qty: 1,
+                              unit: f.unit,
+                              buyPrice: f.buyPrice,
+                              sellPrice: f.sellPrice
+                            }
+                          ]);
                         }}
                         className="text-emerald-500 font-extrabold"
                       >
                         + Tambah Buah
                       </button>
-                    )}
+                    </div>
+
+                    {singleOrderItems.map((it, idx) => (
+                      <div key={idx} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl space-y-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            value={it.fruitId}
+                            onChange={(e) => {
+                              const f = fruits.find((item) => item.id === e.target.value);
+                              if (!f) return;
+                              const copy = [...singleOrderItems];
+                              copy[idx] = {
+                                fruitId: f.id,
+                                fruitName: f.name,
+                                qty: copy[idx].qty,
+                                unit: f.unit,
+                                buyPrice: f.buyPrice,
+                                sellPrice: f.sellPrice
+                              };
+                              setSingleOrderItems(copy);
+                            }}
+                            style={{ backgroundColor: 'var(--bg-card)' }}
+                            className="flex-1 px-2 py-1.5 rounded-lg font-semibold outline-none"
+                          >
+                            {fruits.map((f) => (
+                              <option key={f.id} value={f.id}>{f.name} ({formatRp(f.sellPrice)}/{f.unit})</option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0.01"
+                            required
+                            value={it.qty}
+                            onChange={(e) => {
+                              const copy = [...singleOrderItems];
+                              copy[idx].qty = Number(e.target.value) || 0;
+                              setSingleOrderItems(copy);
+                            }}
+                            style={{ backgroundColor: 'var(--bg-card)' }}
+                            className="w-20 px-2 py-1.5 rounded-lg text-center font-bold outline-none"
+                          />
+                          <span className="text-[11px] w-10 truncate font-semibold">{it.unit}</span>
+                          {singleOrderItems.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setSingleOrderItems(singleOrderItems.filter((_, i) => i !== idx))}
+                              className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 font-bold"
+                            >
+                              x
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Helper Konversi Gram & Tombol Cepat Khusus Satuan kg */}
+                        {it.unit === 'kg' && Number(it.qty) > 0 && (
+                          <div className="flex items-center justify-between text-[10px] px-1">
+                            <span className="text-emerald-500 font-semibold">{formatWeightDetail(it.qty, 'kg')}</span>
+                            <div className="flex gap-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const copy = [...singleOrderItems];
+                                  copy[idx].qty = Number((Number(copy[idx].qty || 0) + 0.25).toFixed(2));
+                                  setSingleOrderItems(copy);
+                                }}
+                                style={{ backgroundColor: 'var(--bg-card)' }}
+                                className="px-1.5 py-0.5 rounded font-bold"
+                              >
+                                +250gr
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const copy = [...singleOrderItems];
+                                  copy[idx].qty = Number((Number(copy[idx].qty || 0) + 0.5).toFixed(2));
+                                  setSingleOrderItems(copy);
+                                }}
+                                style={{ backgroundColor: 'var(--bg-card)' }}
+                                className="px-1.5 py-0.5 rounded font-bold"
+                              >
+                                +500gr
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+
+                    <div>
+                      <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Harga Jual Total (Kosongkan = Otomatis sesuai harga jual)</label>
+                      <input type="number" placeholder={`Otomatis: ${formatRp(orderCalc.finalSell)}`} value={orderCustomSell} onChange={(e) => setOrderCustomSell(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none font-semibold" />
+                    </div>
                   </div>
-                  {bundleItems.map((it, idx) => (
-                    <div key={idx} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="flex items-center gap-1.5 p-2 rounded-xl">
-                      <select
-                        value={it.fruitId}
-                        onChange={(e) => {
-                          const f = fruits.find((item) => item.id === e.target.value);
-                          if (!f) return;
-                          const copy = [...bundleItems];
-                          copy[idx] = {
-                            fruitId: f.id,
-                            fruitName: f.name,
-                            qty: copy[idx].qty,
-                            unit: f.unit,
-                            buyPrice: f.buyPrice,
-                            sellPrice: f.sellPrice
-                          };
-                          setBundleItems(copy);
-                        }}
-                        style={{ backgroundColor: 'var(--bg-card)' }}
-                        className="flex-1 px-2 py-1.5 rounded-lg font-semibold outline-none"
-                      >
-                        {fruits.map((f) => (
-                          <option key={f.id} value={f.id}>{f.name} ({formatRp(f.buyPrice)}/{f.unit})</option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0.1"
-                        value={it.qty}
-                        onChange={(e) => {
-                          const copy = [...bundleItems];
-                          copy[idx].qty = Number(e.target.value) || 0;
-                          setBundleItems(copy);
-                        }}
-                        style={{ backgroundColor: 'var(--bg-card)' }}
-                        className="w-16 px-2 py-1.5 rounded-lg text-center font-bold outline-none"
-                      />
-                      <span className="text-[11px] w-11 truncate font-semibold">{it.unit}</span>
-                      {bundleItems.length > 1 && (
+                ) : (
+                  /* FORM MODE 2: ORDER BUNDLING (PILIH DARI KATALOG PAKET BUNDLING) */
+                  <div className="space-y-2.5">
+                    {bundles.length === 0 ? (
+                      <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3.5 rounded-xl text-center space-y-2">
+                        <p className="font-bold text-amber-500">Belum ada Produk Paket Bundling</p>
+                        <p style={{ color: 'var(--text-muted)' }} className="text-[11px]">
+                          Buat produk paket bundling terlebih dahulu agar bisa dipilih di sini.
+                        </p>
                         <button
                           type="button"
-                          onClick={() => setBundleItems(bundleItems.filter((_, i) => i !== idx))}
-                          className="px-2 py-1 rounded-lg bg-rose-500/15 text-rose-500 font-bold"
+                          onClick={() => {
+                            setOrderSheetOpen(false);
+                            setCurrentView('stock');
+                            setStockFilter('bundles');
+                            openBundleCatalogModal(null);
+                          }}
+                          style={{ backgroundColor: 'var(--accent)' }}
+                          className="px-3 py-2 rounded-xl text-white font-extrabold text-[11px]"
                         >
-                          x
+                          + Buat Produk Bundling Sekarang
                         </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold">Pilih Produk Paket Bundling</label>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOrderSheetOpen(false);
+                                setCurrentView('stock');
+                                setStockFilter('bundles');
+                                openBundleCatalogModal(null);
+                              }}
+                              className="text-[10px] text-emerald-500 font-extrabold"
+                            >
+                              + Paket Baru
+                            </button>
+                          </div>
+                          <select
+                            required
+                            value={selectedBundleId}
+                            onChange={(e) => {
+                              setSelectedBundleId(e.target.value);
+                              setOrderCustomSell('');
+                            }}
+                            style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                            className="w-full px-3 py-2.5 rounded-xl font-bold outline-none"
+                          >
+                            {bundles.map((b) => (
+                              <option key={b.id} value={b.id}>
+                                {b.name} — {formatRp(b.sellPrice)} / paket
+                              </option>
+                            ))}
+                          </select>
+                        </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="number" min="1" placeholder="Jumlah Paket" value={orderMult} onChange={(e) => setOrderMult(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
-                  <input type="number" placeholder="Harga Jual Final (Otomatis)" value={orderCustomSell} onChange={(e) => setOrderCustomSell(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
-                </div>
+                        {activeSelectedBundle && (
+                          <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-2.5 rounded-xl space-y-1">
+                            <span style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold uppercase block">
+                              Isi per 1 Paket ({activeSelectedBundle.name}):
+                            </span>
+                            {(activeSelectedBundle.items || []).map((it, idx) => (
+                              <div key={idx} className="flex justify-between text-[11px]">
+                                <span>• {it.fruitName}</span>
+                                <strong>{Number((Number(it.qty || 0) * (Number(bundleOrderQty) || 1)).toFixed(3))} {it.unit}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Jumlah Paket</label>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              required
+                              value={bundleOrderQty}
+                              onChange={(e) => setBundleOrderQty(e.target.value)}
+                              style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                              className="w-full px-3 py-2.5 rounded-xl font-bold outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label style={{ color: 'var(--text-muted)' }} className="text-[10px] font-bold block mb-1">Harga Jual Final (Custom)</label>
+                            <input
+                              type="number"
+                              placeholder={`Otomatis: ${formatRp(orderCalc.finalSell)}`}
+                              value={orderCustomSell}
+                              onChange={(e) => setOrderCustomSell(e.target.value)}
+                              style={{ backgroundColor: 'var(--bg-card-sub)' }}
+                              className="w-full px-3 py-2.5 rounded-xl font-semibold outline-none"
+                            />
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
 
                 <div style={{ backgroundColor: 'var(--bg-card-sub)' }} className="p-3 rounded-xl flex justify-between">
                   <div><span className="text-[10px] block">Modal</span><strong>{formatRp(orderCalc.totalCost)}</strong></div>
@@ -2440,9 +3047,14 @@ export default function App() {
                   <div><span className="text-[10px] block">Est. Laba</span><strong className="text-teal-500">{formatRp(orderCalc.profit)}</strong></div>
                 </div>
 
-                <input placeholder="Catatan Paket (Opsional)" value={orderNotes} onChange={(e) => setOrderNotes(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
+                <input placeholder="Catatan Order (Opsional)" value={orderNotes} onChange={(e) => setOrderNotes(e.target.value)} style={{ backgroundColor: 'var(--bg-card-sub)' }} className="w-full px-3 py-2.5 rounded-xl outline-none" />
 
-                <button type="submit" style={{ backgroundColor: 'var(--accent)' }} className="w-full py-3 rounded-xl text-white font-extrabold">
+                <button
+                  type="submit"
+                  disabled={orderMode === 'bundle' && bundles.length === 0}
+                  style={{ backgroundColor: 'var(--accent)' }}
+                  className="w-full py-3 rounded-xl text-white font-extrabold disabled:opacity-50"
+                >
                   Simpan Order
                 </button>
               </form>
